@@ -9,6 +9,12 @@
 <meta name="description" content="朋友间共用的购物审批小工具">
 <meta property="og:title" content="朋友购物审批站">
 <meta property="og:description" content="买东西前先让朋友审批！">
+<meta name="apple-mobile-web-app-title" content="购物审批站">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="icon.svg">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="manifest" href="manifest.json">
 <title>朋友购物审批站</title>
 <style>
 /* ===== Reset & Variables ===== */
@@ -1026,18 +1032,19 @@ var DB = {
   },
   getMyStats: function() {
     var user = this.getCurrentUser();
-    if (!user) return { applied: 0, approved: 0, rejected: 0, approvedRate: 0 };
+    if (!user) return { applied: 0, approved: 0, rejected: 0, approvedRate: 0, myTotalSpent: 0 };
     var all = this.data.requests;
     var myApplied = all.filter(function(r) { return r.applicantId === user.id; });
     var myApproved = all.filter(function(r) { return r.approverId === user.id && r.status === 'approved'; });
     var myRejected = all.filter(function(r) { return r.approverId === user.id && r.status === 'rejected'; });
     var decided = myApproved.length + myRejected.length;
+    var myApprovedApplications = all.filter(function(r) { return r.applicantId === user.id && r.status === 'approved'; });
     return {
       applied: myApplied.length,
       approved: myApproved.length,
       rejected: myRejected.length,
       approvedRate: decided > 0 ? Math.round(myApproved.length / decided * 100) : 0,
-      myTotalSpent: myApproved.reduce(function(sum, r) { return sum + r.price; }, 0)
+      myTotalSpent: myApprovedApplications.reduce(function(sum, r) { return sum + r.price; }, 0)
     };
   },
 
@@ -1189,6 +1196,23 @@ var DB = {
     return true;
   },
 
+  updateMember: function(id, updates) {
+    var self = this;
+    var sbUpdates = {};
+    if (updates.pin !== undefined) sbUpdates.pin = updates.pin;
+    if (updates.name !== undefined) sbUpdates.name = updates.name;
+    if (updates.avatar !== undefined) sbUpdates.avatar = updates.avatar;
+    if (updates.is_applicant !== undefined) sbUpdates.is_applicant = updates.is_applicant;
+    if (updates.is_approver !== undefined) sbUpdates.is_approver = updates.is_approver;
+    if (updates.is_admin !== undefined) sbUpdates.is_admin = updates.is_admin;
+    return sb.from('members').update(sbUpdates).eq('id', id).then(function(result) {
+      if (result.error) { showToast(result.error.message, 'error'); throw result.error; }
+      var m = self.getMember(id);
+      if (m) { Object.keys(updates).forEach(function(k) { m[k] = updates[k]; }); }
+      render();
+    });
+  },
+
   deleteRequest: function(requestId) {
     sb.from('requests').delete().eq('id', requestId).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
@@ -1256,6 +1280,50 @@ function handleLogout() {
   render();
 }
 
+function openChangePinModal() {
+  var overlay = document.getElementById('modal-overlay');
+  overlay.innerHTML =
+    '<div class="modal-sheet">' +
+      '<div class="modal-header">' +
+        '<h3>🔑 修改PIN码</h3>' +
+        '<button class="modal-close" data-action="close-modal">✕</button>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">当前PIN码</label>' +
+        '<input type="password" class="form-input" id="pin-old" placeholder="输入当前PIN码" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">新PIN码（4位数字）</label>' +
+        '<input type="password" class="form-input" id="pin-new" placeholder="4位数字" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">确认新PIN码</label>' +
+        '<input type="password" class="form-input" id="pin-confirm" placeholder="再次输入新PIN码" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<button class="btn btn-primary" data-action="confirm-change-pin" style="width:100%;margin-top:8px">确认修改</button>' +
+    '</div>';
+  overlay.classList.add('active');
+}
+
+function handleChangePin() {
+  var user = DB.getMember(state.currentUser);
+  if (!user) { showToast('用户不存在', 'error'); return; }
+  var oldPin = document.getElementById('pin-old').value.trim();
+  var newPin = document.getElementById('pin-new').value.trim();
+  var confirmPin = document.getElementById('pin-confirm').value.trim();
+  if (!oldPin) { showToast('请输入当前PIN码', 'error'); return; }
+  if (user.pin !== oldPin) { showToast('当前PIN码错误', 'error'); return; }
+  if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) { showToast('新PIN码必须是4位数字', 'error'); return; }
+  if (newPin !== confirmPin) { showToast('两次新PIN码不一致', 'error'); return; }
+  if (newPin === oldPin) { showToast('新PIN码不能和旧PIN码相同', 'error'); return; }
+  DB.updateMember(user.id, { pin: newPin }).then(function() {
+    closeModal();
+    showToast('PIN码修改成功！', 'success');
+  }).catch(function() {
+    showToast('修改失败，请重试', 'error');
+  });
+}
+
 /* ===== 登录界面渲染 ===== */
 function renderLoginScreen() {
   var login = document.getElementById('login-screen');
@@ -1312,7 +1380,7 @@ function renderLoginScreen() {
     '</div>' +
     '<div class="form-group">' +
       '<label class="form-label">PIN码（4位数字）</label>' +
-      '<input type="password" class="form-input" id="reg-pin" placeholder="如：1234" maxlength="4" inputmode="numeric">' +
+      '<input type="password" class="form-input" id="reg-pin" placeholder="4位数字" maxlength="4" inputmode="numeric">' +
     '</div>' +
     '<div class="form-group">' +
       '<label class="form-label">确认PIN码</label>' +
@@ -1330,9 +1398,9 @@ function renderLoginScreen() {
         '<div class="login-tab ' + (state.loginMode === 'register' ? 'active' : '') + '" data-action="switch-login-mode" data-mode="register">✨ 注册</div>' +
       '</div>' +
       '<div>' + (state.loginMode === 'login' ? loginHtml : registerHtml) + '</div>' +
-      '<div class="login-hint">管理员"桔梗"默认PIN: <strong>1234</strong><br>' +
+      '<div class="login-hint">' +
         '<span class="login-status-dot ' + (state.serverConnected ? 'connected' : 'disconnected') + '"></span>' +
-        (state.serverConnected ? '已连接 Supabase' : '未连接') +
+        (state.serverConnected ? '已连接服务器' : '未连接') +
       '</div>' +
     '</div>';
 }
@@ -1579,10 +1647,9 @@ function renderHeader() {
   header.innerHTML =
     '<h1>' + (TAB_LABELS[state.view] || '朋友购物审批站') + '</h1>' +
     (user
-      ? '<div class="user-badge" data-action="quick-switch">' +
+      ? '<div class="user-badge">' +
           '<span class="avatar">' + user.avatar + '</span>' +
           '<span>' + Utils.escapeHtml(user.name) + '</span>' +
-          '<span style="font-size:10px;opacity:0.6">▾</span>' +
         '</div>'
       : '');
 }
@@ -1716,7 +1783,6 @@ function renderSubmit() {
   if (!user.isApplicant) {
     return '<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-text">你当前不是申请人<br>无法发起购物申请</div>' +
       '<div style="display:flex;gap:8px;margin-top:16px;justify-content:center">' +
-        '<button class="btn btn-primary" data-action="quick-switch" style="width:auto;padding:10px 24px">切换身份</button>' +
         '<button class="btn btn-ghost" data-action="navigate" data-view="settings" style="width:auto;padding:10px 24px">去设置</button>' +
       '</div></div>';
   }
@@ -1812,45 +1878,70 @@ function renderMine() {
   var myRejections = DB.getMyRejections();
   var myFavorites = DB.getMyFavorites();
   var isAdmin = DB.isCurrentUserAdmin();
+  var filter = state.mineFilter || 'all';
 
   var html = '<div class="greeting">' +
     '<div class="greeting-text">' + user.avatar + ' ' + Utils.escapeHtml(user.name) + ' 的记录</div>' +
-    '<div class="greeting-sub">我的申请、审批和收藏记录</div>' +
+    '<div class="greeting-sub">点击下方卡片查看详细记录</div>' +
   '</div>';
 
+  /* 可点击的统计卡片 */
+  var cardActive = 'border:2px solid var(--primary);background:var(--primary-bg)';
   html += '<div class="stats-grid">' +
-    '<div class="stat-card"><div class="stat-icon">📝</div><div class="stat-value">' + myStats.applied + '</div><div class="stat-label">我申请的</div></div>' +
-    '<div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过的</div></div>' +
-    '<div class="stat-card"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回的</div></div>' +
-    '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="applied" style="cursor:pointer;' + (filter === 'applied' || filter === 'all' ? cardActive : '') + '"><div class="stat-icon">📝</div><div class="stat-value">' + myStats.applied + '</div><div class="stat-label">我申请的</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="approved" style="cursor:pointer;' + (filter === 'approved' ? cardActive : '') + '"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过的</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="rejected" style="cursor:pointer;' + (filter === 'rejected' ? cardActive : '') + '"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回的</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="spent" style="cursor:pointer;' + (filter === 'spent' ? cardActive : '') + '"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="favorites" style="cursor:pointer;' + (filter === 'favorites' ? cardActive : '') + '"><div class="stat-icon">⭐</div><div class="stat-value">' + myFavorites.length + '</div><div class="stat-label">我的收藏</div></div>' +
   '</div>';
 
-  html += '<div class="section-title">📝 我发起的申请</div>';
-  if (myRequests.length > 0) {
-    html += myRequests.map(function(r) { return renderRequestCard(r, { compact: true, showDelete: isAdmin, showFavorite: true }); }).join('');
-  } else {
-    html += '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有发起过申请</div></div></div>';
-  }
+  /* 根据筛选显示对应内容 */
+  if (filter === 'all') {
+    html += '<div class="section-title">📝 我发起的申请</div>';
+    html += myRequests.length > 0
+      ? myRequests.map(function(r) { return renderRequestCard(r, { compact: true, showDelete: isAdmin, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有发起过申请</div></div></div>';
 
-  html += '<div class="section-title">✅ 我审批通过的</div>';
-  if (myApprovals.length > 0) {
-    html += myApprovals.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('');
-  } else {
-    html += '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有通过过别人的申请</div></div></div>';
-  }
+    html += '<div class="section-title">✅ 我审批通过的</div>';
+    html += myApprovals.length > 0
+      ? myApprovals.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有通过过别人的申请</div></div></div>';
 
-  html += '<div class="section-title">❌ 我驳回的</div>';
-  if (myRejections.length > 0) {
-    html += myRejections.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('');
-  } else {
-    html += '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有驳回过别人的申请</div></div></div>';
-  }
+    html += '<div class="section-title">❌ 我驳回的</div>';
+    html += myRejections.length > 0
+      ? myRejections.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有驳回过别人的申请</div></div></div>';
 
-  html += '<div class="section-title">⭐ 我的收藏</div>';
-  if (myFavorites.length > 0) {
-    html += myFavorites.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('');
-  } else {
-    html += '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有收藏过记录<br>在消费记录中点⭐即可收藏</div></div></div>';
+    html += '<div class="section-title">⭐ 我的收藏</div>';
+    html += myFavorites.length > 0
+      ? myFavorites.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有收藏过记录<br>在消费记录中点⭐即可收藏</div></div></div>';
+  } else if (filter === 'applied') {
+    html += '<div class="section-title">📝 我发起的申请（共' + myRequests.length + '条）</div>';
+    html += myRequests.length > 0
+      ? myRequests.map(function(r) { return renderRequestCard(r, { showDelete: isAdmin, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有发起过申请</div></div></div>';
+  } else if (filter === 'approved') {
+    html += '<div class="section-title">✅ 我审批通过的（共' + myApprovals.length + '条）</div>';
+    html += myApprovals.length > 0
+      ? myApprovals.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有通过过别人的申请</div></div></div>';
+  } else if (filter === 'rejected') {
+    html += '<div class="section-title">❌ 我驳回的（共' + myRejections.length + '条）</div>';
+    html += myRejections.length > 0
+      ? myRejections.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有驳回过别人的申请</div></div></div>';
+  } else if (filter === 'spent') {
+    var myApprovedApps = DB.data.requests.filter(function(r) { return r.applicantId === user.id && r.status === 'approved'; });
+    html += '<div class="section-title">💰 我的消费明细（共' + myApprovedApps.length + '条，总计' + Utils.formatPrice(myStats.myTotalSpent) + '）</div>';
+    html += myApprovedApps.length > 0
+      ? myApprovedApps.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有审批通过的申请</div></div></div>';
+  } else if (filter === 'favorites') {
+    html += '<div class="section-title">⭐ 我的收藏（共' + myFavorites.length + '条）</div>';
+    html += myFavorites.length > 0
+      ? myFavorites.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有收藏过记录<br>在消费记录中点⭐即可收藏</div></div></div>';
   }
 
   return html;
@@ -1908,6 +1999,7 @@ function renderSettings() {
           '<div style="font-size:12px;color:var(--text-secondary)">当前已登录</div>' +
         '</div>' +
       '</div>' +
+      '<button class="btn btn-ghost" data-action="open-change-pin" style="margin-bottom:8px;width:100%">🔑 修改PIN码</button>' +
       '<button class="btn btn-ghost" data-action="logout">🚪 退出登录</button>' +
     '</div>' : '';
 
@@ -2135,15 +2227,6 @@ document.addEventListener('click', function(e) {
       state.historyFilter = target.dataset.filter;
       render();
       break;
-    case 'quick-switch':
-      showQuickSwitchModal();
-      break;
-    case 'quick-select-user':
-      state.currentUser = target.dataset.id;
-      localStorage.setItem('fsp-user-id', target.dataset.id);
-      closeModal();
-      render();
-      break;
     case 'navigate-settings':
       closeModal();
       navigate('settings');
@@ -2225,6 +2308,16 @@ document.addEventListener('click', function(e) {
     case 'logout':
       handleLogout();
       break;
+    case 'open-change-pin':
+      openChangePinModal();
+      break;
+    case 'confirm-change-pin':
+      handleChangePin();
+      break;
+    case 'set-mine-filter':
+      state.mineFilter = target.dataset.filter;
+      render();
+      break;
   }
 });
 
@@ -2263,6 +2356,15 @@ document.addEventListener('keydown', function(e) {
 
 /* ===== 初始化 ===== */
 DB.init();
+
+/* ===== Service Worker 注册（PWA离线支持） ===== */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('sw.js').catch(function(err) {
+      console.log('SW注册失败:', err);
+    });
+  });
+}
 </script>
 </body>
 </html>

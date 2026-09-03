@@ -1,0 +1,18 @@
+{
+  "name": "朋友购物审批站",
+  "short_name": "购物审批",
+  "description": "买东西前先让朋友审批！",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d0d1a",
+  "theme_color": "#7c3aed",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
