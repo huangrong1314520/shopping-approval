@@ -1641,10 +1641,9 @@ function renderHeader() {
   header.innerHTML =
     '<h1>' + (TAB_LABELS[state.view] || '朋友购物审批站') + '</h1>' +
     (user
-      ? '<div class="user-badge" data-action="quick-switch">' +
+      ? '<div class="user-badge">' +
           '<span class="avatar">' + user.avatar + '</span>' +
           '<span>' + Utils.escapeHtml(user.name) + '</span>' +
-          '<span style="font-size:10px;opacity:0.6">▾</span>' +
         '</div>'
       : '');
 }
@@ -1778,7 +1777,6 @@ function renderSubmit() {
   if (!user.isApplicant) {
     return '<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-text">你当前不是申请人<br>无法发起购物申请</div>' +
       '<div style="display:flex;gap:8px;margin-top:16px;justify-content:center">' +
-        '<button class="btn btn-primary" data-action="quick-switch" style="width:auto;padding:10px 24px">切换身份</button>' +
         '<button class="btn btn-ghost" data-action="navigate" data-view="settings" style="width:auto;padding:10px 24px">去设置</button>' +
       '</div></div>';
   }
@@ -2221,15 +2219,6 @@ document.addEventListener('click', function(e) {
       break;
     case 'filter-history':
       state.historyFilter = target.dataset.filter;
-      render();
-      break;
-    case 'quick-switch':
-      showQuickSwitchModal();
-      break;
-    case 'quick-select-user':
-      state.currentUser = target.dataset.id;
-      localStorage.setItem('fsp-user-id', target.dataset.id);
-      closeModal();
       render();
       break;
     case 'navigate-settings':
