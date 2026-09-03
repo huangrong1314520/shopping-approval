@@ -1189,6 +1189,23 @@ var DB = {
     return true;
   },
 
+  updateMember: function(id, updates) {
+    var self = this;
+    var sbUpdates = {};
+    if (updates.pin !== undefined) sbUpdates.pin = updates.pin;
+    if (updates.name !== undefined) sbUpdates.name = updates.name;
+    if (updates.avatar !== undefined) sbUpdates.avatar = updates.avatar;
+    if (updates.is_applicant !== undefined) sbUpdates.is_applicant = updates.is_applicant;
+    if (updates.is_approver !== undefined) sbUpdates.is_approver = updates.is_approver;
+    if (updates.is_admin !== undefined) sbUpdates.is_admin = updates.is_admin;
+    return sb.from('members').update(sbUpdates).eq('id', id).then(function(result) {
+      if (result.error) { showToast(result.error.message, 'error'); throw result.error; }
+      var m = self.getMember(id);
+      if (m) { Object.keys(updates).forEach(function(k) { m[k] = updates[k]; }); }
+      render();
+    });
+  },
+
   deleteRequest: function(requestId) {
     sb.from('requests').delete().eq('id', requestId).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
@@ -1256,6 +1273,50 @@ function handleLogout() {
   render();
 }
 
+function openChangePinModal() {
+  var overlay = document.getElementById('modal-overlay');
+  overlay.innerHTML =
+    '<div class="modal-sheet">' +
+      '<div class="modal-header">' +
+        '<h3>🔑 修改PIN码</h3>' +
+        '<button class="modal-close" data-action="close-modal">✕</button>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">当前PIN码</label>' +
+        '<input type="password" class="form-input" id="pin-old" placeholder="输入当前PIN码" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">新PIN码（4位数字）</label>' +
+        '<input type="password" class="form-input" id="pin-new" placeholder="4位数字" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">确认新PIN码</label>' +
+        '<input type="password" class="form-input" id="pin-confirm" placeholder="再次输入新PIN码" maxlength="4" inputmode="numeric">' +
+      '</div>' +
+      '<button class="btn btn-primary" data-action="confirm-change-pin" style="width:100%;margin-top:8px">确认修改</button>' +
+    '</div>';
+  overlay.classList.add('active');
+}
+
+function handleChangePin() {
+  var user = DB.getMember(state.currentUser);
+  if (!user) { showToast('用户不存在', 'error'); return; }
+  var oldPin = document.getElementById('pin-old').value.trim();
+  var newPin = document.getElementById('pin-new').value.trim();
+  var confirmPin = document.getElementById('pin-confirm').value.trim();
+  if (!oldPin) { showToast('请输入当前PIN码', 'error'); return; }
+  if (user.pin !== oldPin) { showToast('当前PIN码错误', 'error'); return; }
+  if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) { showToast('新PIN码必须是4位数字', 'error'); return; }
+  if (newPin !== confirmPin) { showToast('两次新PIN码不一致', 'error'); return; }
+  if (newPin === oldPin) { showToast('新PIN码不能和旧PIN码相同', 'error'); return; }
+  DB.updateMember(user.id, { pin: newPin }).then(function() {
+    closeModal();
+    showToast('PIN码修改成功！', 'success');
+  }).catch(function() {
+    showToast('修改失败，请重试', 'error');
+  });
+}
+
 /* ===== 登录界面渲染 ===== */
 function renderLoginScreen() {
   var login = document.getElementById('login-screen');
@@ -1312,7 +1373,7 @@ function renderLoginScreen() {
     '</div>' +
     '<div class="form-group">' +
       '<label class="form-label">PIN码（4位数字）</label>' +
-      '<input type="password" class="form-input" id="reg-pin" placeholder="如：1234" maxlength="4" inputmode="numeric">' +
+      '<input type="password" class="form-input" id="reg-pin" placeholder="4位数字" maxlength="4" inputmode="numeric">' +
     '</div>' +
     '<div class="form-group">' +
       '<label class="form-label">确认PIN码</label>' +
@@ -1330,9 +1391,9 @@ function renderLoginScreen() {
         '<div class="login-tab ' + (state.loginMode === 'register' ? 'active' : '') + '" data-action="switch-login-mode" data-mode="register">✨ 注册</div>' +
       '</div>' +
       '<div>' + (state.loginMode === 'login' ? loginHtml : registerHtml) + '</div>' +
-      '<div class="login-hint">管理员"桔梗"默认PIN: <strong>1234</strong><br>' +
+      '<div class="login-hint">' +
         '<span class="login-status-dot ' + (state.serverConnected ? 'connected' : 'disconnected') + '"></span>' +
-        (state.serverConnected ? '已连接 Supabase' : '未连接') +
+        (state.serverConnected ? '已连接服务器' : '未连接') +
       '</div>' +
     '</div>';
 }
@@ -1908,6 +1969,7 @@ function renderSettings() {
           '<div style="font-size:12px;color:var(--text-secondary)">当前已登录</div>' +
         '</div>' +
       '</div>' +
+      '<button class="btn btn-ghost" data-action="open-change-pin" style="margin-bottom:8px;width:100%">🔑 修改PIN码</button>' +
       '<button class="btn btn-ghost" data-action="logout">🚪 退出登录</button>' +
     '</div>' : '';
 
@@ -2224,6 +2286,12 @@ document.addEventListener('click', function(e) {
       break;
     case 'logout':
       handleLogout();
+      break;
+    case 'open-change-pin':
+      openChangePinModal();
+      break;
+    case 'confirm-change-pin':
+      handleChangePin();
       break;
   }
 });
