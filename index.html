@@ -9,6 +9,12 @@
 <meta name="description" content="朋友间共用的购物审批小工具">
 <meta property="og:title" content="朋友购物审批站">
 <meta property="og:description" content="买东西前先让朋友审批！">
+<meta name="apple-mobile-web-app-title" content="购物审批站">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="icon.svg">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="manifest" href="manifest.json">
 <title>朋友购物审批站</title>
 <style>
 /* ===== Reset & Variables ===== */
@@ -409,6 +415,69 @@ body {
   color: var(--text-secondary);
   font-size: 16px;
   cursor: pointer;
+}
+
+/* ===== 安装引导 ===== */
+.install-fab {
+  position: fixed;
+  bottom: calc(var(--tabbar-h) + 12px);
+  right: 16px;
+  z-index: 90;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--gradient);
+  border: none;
+  color: #fff;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(124, 58, 237, 0.5);
+  animation: pulse 2s ease infinite;
+  transition: transform 0.2s;
+}
+.install-fab:active { transform: scale(0.9); }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4); }
+  50% { box-shadow: 0 4px 24px rgba(124, 58, 237, 0.7); }
+}
+.install-guide-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+.install-guide-step .step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--gradient);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.install-guide-step .step-text { font-size: 14px; line-height: 1.5; color: var(--text); }
+.install-guide-step .step-text b { color: var(--primary-light); }
+.install-btn-primary {
+  width: 100%;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--gradient);
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 12px;
 }
 
 /* ===== Toast ===== */
@@ -820,6 +889,9 @@ body {
 </div>
 <div id="modal-overlay" class="modal-overlay"></div>
 <div id="toast-container" class="toast-container"></div>
+
+<!-- 安装引导按钮（仅非PWA模式显示） -->
+<button id="install-fab" class="install-fab" style="display:none" title="安装到桌面">📱</button>
 
 <script>
 /* ============================================================
@@ -2350,6 +2422,160 @@ document.addEventListener('keydown', function(e) {
 
 /* ===== 初始化 ===== */
 DB.init();
+
+/* ===== Service Worker 注册（PWA离线支持） ===== */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('sw.js').catch(function(err) {
+      console.log('SW注册失败:', err);
+    });
+  });
+}
+
+/* ===== PWA 安装引导 ===== */
+var deferredPrompt = null;
+var installFab = document.getElementById('install-fab');
+
+/* 判断是否已安装（standalone模式） */
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+         window.navigator.standalone === true ||
+         document.referrer.includes('android-app://');
+}
+
+/* 判断平台 */
+function getPlatform() {
+  var ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('micromessenger')) return 'wechat';
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod')) return 'ios';
+  if (ua.includes('android')) return 'android';
+  return 'other';
+}
+
+/* 显示安装引导弹窗 */
+function showInstallGuide() {
+  var platform = getPlatform();
+  var steps = '';
+  var title = '安装到手机桌面';
+  var subtitle = '';
+
+  if (platform === 'wechat') {
+    title = '在浏览器中打开后安装';
+    subtitle = '微信内无法直接安装，请先在浏览器中打开';
+    steps = [
+      '点击右上角 <b>···</b> 三个点',
+      '选择 <b>"在浏览器中打开"</b>',
+      '打开后按下方对应手机系统的步骤操作'
+    ];
+    /* 附带系统步骤 */
+    var ua = navigator.userAgent.toLowerCase();
+    var sys = ua.includes('iphone') ? 'ios' : 'android';
+    if (sys === 'ios') {
+      steps.push('在Safari中点底部 <b>分享</b> 图标（方框+向上箭头）');
+      steps.push('选择 <b>"添加到主屏幕"</b>');
+      steps.push('点击 <b>"添加"</b> 即可');
+    } else {
+      steps.push('点击浏览器右上角 <b>三个点</b>');
+      steps.push('选择 <b>"添加到主屏幕"</b> 或 <b>"安装应用"</b>');
+      steps.push('点击 <b>"安装"</b> 即可');
+    }
+  } else if (platform === 'ios') {
+    subtitle = 'iPhone/iPad 用户请按以下步骤操作';
+    steps = [
+      '点击Safari底部工具栏中间的 <b>分享</b> 图标（方框+向上箭头）',
+      '在弹出菜单中找到并点击 <b>"添加到主屏幕"</b>',
+      '点击右上角 <b>"添加"</b> 即可，桌面会出现购物车图标'
+    ];
+  } else if (platform === 'android') {
+    subtitle = '安卓用户请按以下步骤操作';
+    if (deferredPrompt) {
+      /* Chrome支持原生安装提示 */
+      steps = ['点击下方 <b>"立即安装"</b> 按钮即可'];
+    } else {
+      steps = [
+        '点击浏览器右上角 <b>三个点</b> 菜单',
+        '选择 <b>"添加到主屏幕"</b> 或 <b>"安装应用"</b>',
+        '点击 <b>"安装"</b> 即可，桌面会出现购物车图标'
+      ];
+    }
+  } else {
+    subtitle = '请按以下步骤操作';
+    steps = [
+      '点击浏览器地址栏旁边的 <b>安装图标</b>（或菜单中的"安装应用"）',
+      '点击 <b>"安装"</b> 即可'
+    ];
+  }
+
+  var stepsHtml = steps.map(function(s, i) {
+    return '<div class="install-guide-step"><div class="step-num">' + (i + 1) + '</div><div class="step-text">' + s + '</div></div>';
+  }).join('');
+
+  var btnHtml = '';
+  if (platform === 'android' && deferredPrompt) {
+    btnHtml = '<button class="install-btn-primary" onclick="triggerInstall()">立即安装</button>';
+  }
+
+  var html = '<div class="modal-sheet">' +
+    '<div class="modal-header"><h3>' + title + '</h3><button class="modal-close" onclick="closeModal()">✕</button></div>' +
+    (subtitle ? '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px">' + subtitle + '</p>' : '') +
+    stepsHtml +
+    '<div style="text-align:center;margin-top:12px;padding:12px;background:var(--bg-input);border-radius:var(--radius-sm)">' +
+      '<div style="font-size:40px">🛒</div>' +
+      '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">安装后像App一样使用，无需浏览器地址栏</div>' +
+    '</div>' +
+    btnHtml +
+    '<div style="height:8px"></div>' +
+  '</div>';
+
+  var overlay = document.getElementById('modal-overlay');
+  overlay.innerHTML = html;
+  overlay.classList.add('active');
+}
+
+/* 触发原生安装 */
+function triggerInstall() {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function(result) {
+      if (result.outcome === 'accepted') {
+        showToast('安装成功！', 'success');
+        installFab.style.display = 'none';
+      }
+      deferredPrompt = null;
+      closeModal();
+    });
+  }
+}
+
+/* 监听安装提示事件（Android Chrome） */
+window.addEventListener('beforeinstallprompt', function(e) {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (!isStandalone()) {
+    installFab.style.display = 'flex';
+  }
+});
+
+/* 安装按钮点击 */
+installFab.addEventListener('click', function() {
+  showInstallGuide();
+});
+
+/* 已安装则隐藏按钮 */
+if (isStandalone()) {
+  installFab.style.display = 'none';
+} else {
+  /* 延迟显示，等用户登录后再显示 */
+  var checkInterval = setInterval(function() {
+    var app = document.getElementById('app');
+    if (app && app.style.display !== 'none') {
+      installFab.style.display = 'flex';
+      clearInterval(checkInterval);
+    }
+  }, 1000);
+  /* 10秒后强制检查 */
+  setTimeout(function() { clearInterval(checkInterval); }, 10000);
+}
 </script>
 </body>
 </html>
