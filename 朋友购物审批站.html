@@ -40,7 +40,10 @@
   --header-h: 56px;
 }
 
-html, body { height: 100%; overflow: hidden; }
+html, body { height: 100%; }
+body { overflow: hidden; }
+/* iOS Safari 允许登录页滑动 */
+.login-screen { overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 body {
   background: var(--bg);
@@ -683,12 +686,13 @@ body {
 /* ===== Login Screen ===== */
 .login-screen {
   display: none;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   background: var(--bg);
   align-items: center;
   justify-content: center;
   padding: 20px;
+  padding-bottom: 60px;
 }
 .login-card {
   width: 100%;
@@ -697,6 +701,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 32px 24px;
+  margin: auto;
 }
 .login-logo {
   text-align: center;
