@@ -514,6 +514,7 @@ body {
 }
 .toast-success { background: var(--success-bg); color: var(--success); border: 1px solid rgba(34, 197, 94, 0.3); }
 .toast-error { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+.toast-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
 .toast-info { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); }
 
 /* ===== Member Selector ===== */
@@ -1114,6 +1115,7 @@ function mapRequest(r) {
     status: r.status, votes: r.votes || [],
     approverId: r.approver_id, approverName: r.approver_name, approverAvatar: r.approver_avatar,
     comment: r.comment,
+    version: r.version || 0,
     createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
     decidedAt: r.decided_at ? new Date(r.decided_at).getTime() : null };
 }
@@ -1311,6 +1313,20 @@ var DB = {
     });
   },
 
+  /* 从服务器刷新单条请求（用于冲突重试），返回 Promise */
+  refreshRequestSingle: function(requestId) {
+    var self = this;
+    return sb.from('requests').select('*').eq('id', requestId).then(function(result) {
+      if (result.error) return null;
+      var data = result.data || [];
+      if (data.length === 0) return null;
+      var updated = mapRequest(data[0]);
+      var idx = self.data.requests.findIndex(function(r) { return r.id === requestId; });
+      if (idx >= 0) self.data.requests[idx] = updated;
+      return updated;
+    });
+  },
+
   refreshFavorites: function() {
     var self = this;
     sb.from('favorites').select('*').order('created_at', { ascending: false }).then(function(result) {
@@ -1490,131 +1506,234 @@ var DB = {
   },
 
   /* --- 写操作：直接 Supabase 查询 --- */
+  /* 发起申请：等待服务器确认，返回 Promise<{success, id}> */
   addRequest: function(item, price, reason, link, imageUrl) {
+    var self = this;
     var user = this.getCurrentUser();
-    if (!user) return null;
+    if (!user) return Promise.resolve({ success: false });
     var id = 'r' + Date.now();
-    sb.from('requests').insert({
+    var newReq = {
+      id: id,
+      applicantId: user.id, applicantName: user.name, applicantAvatar: user.avatar,
+      item: item, price: Number(price), reason: reason, link: link || '',
+      imageUrl: imageUrl || '',
+      status: 'pending', votes: [], version: 1,
+      createdAt: Date.now(), decidedAt: null,
+      approverId: null, approverName: null, approverAvatar: null, comment: null
+    };
+    /* 乐观插入本地列表 */
+    self.data.requests.unshift(newReq);
+    render();
+
+    return sb.from('requests').insert({
       id: id,
       applicant_id: user.id, applicant_name: user.name, applicant_avatar: user.avatar,
       item: item, price: price, reason: reason, link: link || '',
       image_url: imageUrl || '',
-      status: 'pending', votes: []
-    }).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+      status: 'pending', votes: [], version: 1
+    }).select().then(function(result) {
+      if (result.error) {
+        /* 失败则回滚本地数据 */
+        var idx = self.data.requests.findIndex(function(r) { return r.id === id; });
+        if (idx >= 0) self.data.requests.splice(idx, 1);
+        showToast(result.error.message, 'error');
+        render();
+        return { success: false };
+      }
+      return { success: true, id: id };
+    }).catch(function() {
+      /* 网络错误也回滚 */
+      var idx = self.data.requests.findIndex(function(r) { return r.id === id; });
+      if (idx >= 0) self.data.requests.splice(idx, 1);
+      showToast('网络错误，提交失败，请重试', 'error');
+      render();
+      return { success: false };
     });
-    return true;
   },
 
+  /* 投票：乐观锁 + 冲突重试，返回 Promise<{success, status, votes}> */
   voteRequest: function(requestId, decision, comment) {
+    var self = this;
     var user = this.getCurrentUser();
-    if (!user) return false;
-    if (!user.isApprover) { showToast('你不是审批人，无法投票', 'error'); return false; }
-    var req = this.data.requests.find(function(r) { return r.id === requestId; });
-    if (!req) return false;
-    if (req.applicantId === user.id) { showToast('不能审批自己的申请', 'error'); return false; }
+    if (!user) return Promise.resolve({ success: false });
+    if (!user.isApprover) { showToast('你不是审批人，无法投票', 'error'); return Promise.resolve({ success: false }); }
 
-    /* 48小时投票截止检查 */
-    var deadline = req.createdAt + 48 * 60 * 60 * 1000;
-    if (Date.now() > deadline) {
-      showToast('该申请投票已截止（超过48小时），无法再投票', 'error');
-      return false;
+    var MAX_RETRIES = 3;
+
+    function attempt(retryCount) {
+      var req = self.data.requests.find(function(r) { return r.id === requestId; });
+      if (!req) return Promise.resolve({ success: false });
+      if (req.applicantId === user.id) { showToast('不能审批自己的申请', 'error'); return Promise.resolve({ success: false }); }
+
+      /* 48小时投票截止检查 */
+      var deadline = req.createdAt + 48 * 60 * 60 * 1000;
+      if (Date.now() > deadline) {
+        showToast('该申请投票已截止（超过48小时），无法再投票', 'error');
+        return Promise.resolve({ success: false });
+      }
+
+      var currentVersion = req.version || 0;
+
+      /* 计算新的投票列表 */
+      var votes = req.votes ? req.votes.slice() : [];
+      var existingIdx = -1;
+      for (var i = 0; i < votes.length; i++) {
+        if (votes[i].userId === user.id) { existingIdx = i; break; }
+      }
+      var newVote = {
+        userId: user.id, userName: user.name, userAvatar: user.avatar,
+        decision: decision, comment: comment || '', votedAt: Date.now(),
+        imageUrl: voteImageUrl || null
+      };
+      if (existingIdx >= 0) {
+        votes[existingIdx] = newVote;
+      } else {
+        votes.push(newVote);
+      }
+
+      /* 计算状态 */
+      var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+      var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+      var newStatus;
+      if (approveCount > rejectCount) newStatus = 'approved';
+      else if (rejectCount > approveCount) newStatus = 'rejected';
+      else newStatus = 'pending';
+
+      var updateData = {
+        votes: votes,
+        status: newStatus,
+        version: currentVersion + 1,
+        decided_at: newStatus !== 'pending' ? new Date().toISOString() : null
+      };
+      if (newStatus !== 'pending') {
+        updateData.approver_id = user.id;
+        updateData.approver_name = user.name;
+        updateData.approver_avatar = user.avatar;
+        updateData.comment = comment || '';
+      } else {
+        updateData.approver_id = null;
+        updateData.approver_name = null;
+        updateData.approver_avatar = null;
+        updateData.comment = null;
+      }
+
+      /* 先乐观更新本地（UI 立刻响应） */
+      req.votes = votes;
+      req.status = newStatus;
+      req.version = currentVersion + 1;
+      if (newStatus !== 'pending') {
+        req.approverId = user.id;
+        req.approverName = user.name;
+        req.approverAvatar = user.avatar;
+        req.comment = comment || '';
+        req.decidedAt = Date.now();
+      } else {
+        req.approverId = null;
+        req.approverName = null;
+        req.approverAvatar = null;
+        req.comment = null;
+        req.decidedAt = null;
+      }
+      render();
+
+      /* 带版本号条件更新 + select 确认结果 */
+      return sb.from('requests').update(updateData).eq('id', requestId).eq('version', currentVersion).select().then(function(result) {
+        if (result.error) {
+          /* version 列不存在（旧数据未迁移），降级为不带版本的更新 */
+          if (result.error.code === '42703' || (result.error.message && result.error.message.indexOf('version') >= 0)) {
+            return sb.from('requests').update({
+              votes: votes, status: newStatus,
+              decided_at: updateData.decided_at,
+              approver_id: updateData.approver_id, approver_name: updateData.approver_name,
+              approver_avatar: updateData.approver_avatar, comment: updateData.comment
+            }).eq('id', requestId).then(function(r2) {
+              if (r2.error) {
+                showToast(r2.error.message, 'error');
+                return { success: false };
+              }
+              return { success: true, status: newStatus, votes: votes };
+            });
+          }
+          showToast(result.error.message, 'error');
+          return { success: false };
+        }
+
+        var data = result.data || [];
+        if (data.length === 0) {
+          /* 版本冲突，有人抢先更新了 */
+          if (retryCount >= MAX_RETRIES - 1) {
+            showToast('投票冲突，请刷新页面后重试', 'error');
+            return { success: false };
+          }
+          /* 从服务器拉取最新数据，然后重试 */
+          return self.refreshRequestSingle(requestId).then(function() {
+            return attempt(retryCount + 1);
+          });
+        }
+
+        /* 更新成功，同步服务器版本 */
+        if (data[0] && data[0].version !== undefined) {
+          req.version = data[0].version;
+        }
+        return { success: true, status: newStatus, votes: votes };
+      }).catch(function() {
+        showToast('网络错误，请重试', 'error');
+        return { success: false };
+      });
     }
 
-    var votes = req.votes || [];
-    /* 检查是否已投过票（改票） */
-    var existingIdx = -1;
-    for (var i = 0; i < votes.length; i++) {
-      if (votes[i].userId === user.id) { existingIdx = i; break; }
-    }
-    var newVote = {
-      userId: user.id, userName: user.name, userAvatar: user.avatar,
-      decision: decision, comment: comment || '', votedAt: Date.now(),
-      imageUrl: voteImageUrl || null
-    };
-    if (existingIdx >= 0) {
-      votes[existingIdx] = newVote;
-    } else {
-      votes.push(newVote);
-    }
-
-    /* 计算最终状态：通过人数 > 驳回人数 才通过，反之驳回，相等则继续待定 */
-    var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
-    var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
-    var newStatus;
-    if (approveCount > rejectCount) {
-      newStatus = 'approved';
-    } else if (rejectCount > approveCount) {
-      newStatus = 'rejected';
-    } else {
-      newStatus = 'pending';
-    }
-
-    var updateData = {
-      votes: votes,
-      status: newStatus,
-      decided_at: newStatus !== 'pending' ? new Date().toISOString() : null
-    };
-    /* 如果最终决定，记录最后决定者；回到待定则清空 */
-    if (newStatus !== 'pending') {
-      updateData.approver_id = user.id;
-      updateData.approver_name = user.name;
-      updateData.approver_avatar = user.avatar;
-      updateData.comment = comment || '';
-    } else {
-      updateData.approver_id = null;
-      updateData.approver_name = null;
-      updateData.approver_avatar = null;
-      updateData.comment = null;
-    }
-
-    /* 立即更新本地数据，不用等实时推送回来 */
-    req.votes = votes;
-    req.status = newStatus;
-    if (newStatus !== 'pending') {
-      req.approverId = user.id;
-      req.approverName = user.name;
-      req.approverAvatar = user.avatar;
-      req.comment = comment || '';
-      req.decidedAt = Date.now();
-    } else {
-      req.approverId = null;
-      req.approverName = null;
-      req.approverAvatar = null;
-      req.comment = null;
-      req.decidedAt = null;
-    }
-
-    sb.from('requests').update(updateData).eq('id', requestId).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
-    });
-    return true;
+    return attempt(0);
   },
 
+  /* 添加成员：等待服务器确认，返回 Promise<{success, id}> */
   addMember: function(name, avatar, isApplicant, isApprover) {
+    var self = this;
     var id = 'm' + Date.now();
-    sb.from('members').insert({
+    var newMember = {
+      id: id, name: name, avatar: avatar || '🐱',
+      isApplicant: !!isApplicant, isApprover: !!isApprover, isAdmin: false, pin: '0000'
+    };
+    /* 乐观添加到本地 */
+    self.data.members.push(newMember);
+    render();
+
+    return sb.from('members').insert({
       id: id, name: name, avatar: avatar || '🐱',
       is_applicant: !!isApplicant, is_approver: !!isApprover, is_admin: false, pin: '0000'
-    }).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+    }).select().then(function(result) {
+      if (result.error) {
+        /* 失败回滚 */
+        var idx = self.data.members.findIndex(function(m) { return m.id === id; });
+        if (idx >= 0) self.data.members.splice(idx, 1);
+        showToast(result.error.message, 'error');
+        render();
+        return { success: false };
+      }
+      return { success: true, id: id };
+    }).catch(function() {
+      var idx = self.data.members.findIndex(function(m) { return m.id === id; });
+      if (idx >= 0) self.data.members.splice(idx, 1);
+      showToast('网络错误，添加失败', 'error');
+      render();
+      return { success: false };
     });
-    return id;
   },
 
+  /* 删除成员：先清理投票再删除，返回 Promise<{success, failedUpdates}> */
   removeMember: function(id) {
-    var member = this.getMember(id);
-    if (member && member.isAdmin) return;
-    if (this.data.members.length <= 1) return;
-
     var self = this;
-    /* 从所有申请中移除该成员的投票，并重新计算状态 */
+    var member = this.getMember(id);
+    if (member && member.isAdmin) return Promise.resolve({ success: false, reason: 'admin' });
+    if (this.data.members.length <= 1) return Promise.resolve({ success: false, reason: 'last' });
+
+    var memberName = member ? member.name : '';
+
+    /* 先计算需要更新的申请（不改本地，等确认后再改） */
     var statusUpdates = [];
     self.data.requests.forEach(function(req) {
       var votes = req.votes || [];
       var newVotes = votes.filter(function(v) { return v.userId !== id; });
       if (newVotes.length !== votes.length) {
-        /* 重新计算状态 */
         var approveCount = newVotes.filter(function(v) { return v.decision === 'approved'; }).length;
         var rejectCount = newVotes.filter(function(v) { return v.decision === 'rejected'; }).length;
         var newStatus;
@@ -1622,66 +1741,165 @@ var DB = {
         else if (rejectCount > approveCount) newStatus = 'rejected';
         else newStatus = 'pending';
 
-        req.votes = newVotes;
-        req.status = newStatus;
-        if (newStatus === 'pending') {
-          req.decidedAt = null;
-          req.approverId = null;
-          req.approverName = null;
-          req.approverAvatar = null;
-          req.comment = null;
+        var decidedAt = null;
+        var approverId = null, approverName = null, approverAvatar = null, comment = null;
+        if (newStatus !== 'pending') {
+          decidedAt = req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString();
+          approverId = req.approverId;
+          approverName = req.approverName;
+          approverAvatar = req.approverAvatar;
+          comment = req.comment;
         }
+
         statusUpdates.push({
-          id: req.id,
-          votes: newVotes,
-          status: newStatus,
-          decided_at: newStatus !== 'pending' ? (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()) : null,
-          approver_id: newStatus !== 'pending' ? req.approverId : null,
-          approver_name: newStatus !== 'pending' ? req.approverName : null,
-          approver_avatar: newStatus !== 'pending' ? req.approverAvatar : null,
-          comment: newStatus !== 'pending' ? req.comment : null
+          id: req.id, newVotes: newVotes, newStatus: newStatus,
+          oldVotes: votes.slice(), oldStatus: req.status,
+          oldDecidedAt: req.decidedAt,
+          oldApproverId: req.approverId, oldApproverName: req.approverName,
+          oldApproverAvatar: req.approverAvatar, oldComment: req.comment,
+          decided_at: decidedAt,
+          approver_id: approverId, approver_name: approverName,
+          approver_avatar: approverAvatar, comment: comment
         });
       }
     });
 
-    /* 批量更新申请状态 */
-    statusUpdates.forEach(function(u) {
-      sb.from('requests').update({
-        votes: u.votes, status: u.status, decided_at: u.decided_at,
+    /* 步骤1：更新所有相关申请的投票 */
+    var failedUpdates = [];
+    var updatePromises = statusUpdates.map(function(u) {
+      return sb.from('requests').update({
+        votes: u.newVotes, status: u.newStatus, decided_at: u.decided_at,
         approver_id: u.approver_id, approver_name: u.approver_name,
         approver_avatar: u.approver_avatar, comment: u.comment
-      }).eq('id', u.id).catch(function(e) { console.log('更新投票失败:', e); });
+      }).eq('id', u.id).then(function(result) {
+        if (result.error) {
+          failedUpdates.push(u.id);
+          return false;
+        }
+        /* 成功则更新本地 */
+        var req = self.data.requests.find(function(r) { return r.id === u.id; });
+        if (req) {
+          req.votes = u.newVotes;
+          req.status = u.newStatus;
+          req.decidedAt = u.newStatus !== 'pending' ? (u.decided_at ? new Date(u.decided_at).getTime() : Date.now()) : null;
+          req.approverId = u.approver_id;
+          req.approverName = u.approver_name;
+          req.approverAvatar = u.approver_avatar;
+          req.comment = u.comment;
+        }
+        return true;
+      }).catch(function() {
+        failedUpdates.push(u.id);
+        return false;
+      });
     });
 
-    /* 删除成员 */
-    sb.from('members').delete().eq('id', id).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+    return Promise.all(updatePromises).then(function() {
+      /* 步骤2：删除成员 */
+      return sb.from('members').delete().eq('id', id).then(function(result) {
+        if (result.error) {
+          showToast('删除成员失败: ' + result.error.message, 'error');
+          /* 回滚已成功的申请更新 */
+          statusUpdates.forEach(function(u) {
+            if (failedUpdates.indexOf(u.id) < 0) {
+              var req = self.data.requests.find(function(r) { return r.id === u.id; });
+              if (req) {
+                req.votes = u.oldVotes;
+                req.status = u.oldStatus;
+                req.decidedAt = u.oldDecidedAt;
+                req.approverId = u.oldApproverId;
+                req.approverName = u.oldApproverName;
+                req.approverAvatar = u.oldApproverAvatar;
+                req.comment = u.oldComment;
+              }
+            }
+          });
+          render();
+          return { success: false };
+        }
+
+        /* 成功：从本地移除成员 */
+        var idx = self.data.members.findIndex(function(m) { return m.id === id; });
+        if (idx >= 0) self.data.members.splice(idx, 1);
+        if (state.currentUser === id) {
+          state.currentUser = null;
+          localStorage.removeItem('fsp-user-id');
+        }
+        render();
+
+        if (failedUpdates.length > 0) {
+          showToast('已删除 ' + memberName + '，但有 ' + failedUpdates.length + ' 条申请投票清理失败，请刷新页面', 'warning');
+          return { success: true, failedUpdates: failedUpdates };
+        }
+        return { success: true };
+      });
+    }).catch(function() {
+      showToast('网络错误，删除失败', 'error');
+      return { success: false };
     });
-    if (state.currentUser === id) {
-      state.currentUser = null;
-      localStorage.removeItem('fsp-user-id');
-    }
   },
 
   toggleMemberRole: function(id, role) {
+    var self = this;
     var member = this.getMember(id);
     if (!member) return false;
+    var oldApplicant = member.isApplicant;
+    var oldApprover = member.isApprover;
     var wouldBeApplicant = role === 'isApplicant' ? !member.isApplicant : member.isApplicant;
     var wouldBeApprover = role === 'isApprover' ? !member.isApprover : member.isApprover;
     if (!wouldBeApplicant && !wouldBeApprover) return false;
+    /* 乐观更新本地 */
+    if (role === 'isApplicant') member.isApplicant = !member.isApplicant;
+    if (role === 'isApprover') member.isApprover = !member.isApprover;
+    render();
+
     var update = {};
-    if (role === 'isApplicant') update.is_applicant = !member.isApplicant;
-    if (role === 'isApprover') update.is_approver = !member.isApprover;
+    if (role === 'isApplicant') update.is_applicant = !oldApplicant;
+    if (role === 'isApprover') update.is_approver = !oldApprover;
     sb.from('members').update(update).eq('id', id).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+      if (result.error) {
+        /* 失败回滚 */
+        var m = self.getMember(id);
+        if (m) {
+          m.isApplicant = oldApplicant;
+          m.isApprover = oldApprover;
+        }
+        showToast(result.error.message, 'error');
+        render();
+      }
+    }).catch(function() {
+      var m = self.getMember(id);
+      if (m) {
+        m.isApplicant = oldApplicant;
+        m.isApprover = oldApprover;
+      }
+      showToast('网络错误，修改失败', 'error');
+      render();
     });
     return true;
   },
 
   updateMemberName: function(id, name) {
+    var self = this;
     if (!name) return false;
+    var member = this.getMember(id);
+    var oldName = member ? member.name : '';
+    /* 乐观更新本地 */
+    if (member) member.name = name;
+
     sb.from('members').update({ name: name }).eq('id', id).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+      if (result.error) {
+        /* 失败回滚 */
+        var m = self.getMember(id);
+        if (m) m.name = oldName;
+        showToast(result.error.message, 'error');
+        render();
+      }
+    }).catch(function() {
+      var m = self.getMember(id);
+      if (m) m.name = oldName;
+      showToast('网络错误，修改失败', 'error');
+      render();
     });
     return true;
   },
@@ -1703,10 +1921,37 @@ var DB = {
     });
   },
 
+  /* 删除申请：等待服务器确认，返回 Promise<{success}> */
   deleteRequest: function(requestId) {
-    sb.from('favorites').delete().eq('request_id', requestId).catch(function() {});
-    sb.from('requests').delete().eq('id', requestId).then(function(result) {
-      if (result.error) showToast(result.error.message, 'error');
+    var self = this;
+    var req = this.data.requests.find(function(r) { return r.id === requestId; });
+    if (!req) return Promise.resolve({ success: false });
+
+    /* 先乐观删除本地 */
+    var idx = self.data.requests.findIndex(function(r) { return r.id === requestId; });
+    if (idx >= 0) self.data.requests.splice(idx, 1);
+    /* 同时移除本地收藏中的对应项 */
+    self.data.favorites = self.data.favorites.filter(function(f) { return f.requestId !== requestId; });
+    render();
+
+    /* 先删收藏，再删申请 */
+    return sb.from('favorites').delete().eq('request_id', requestId).catch(function() {}).then(function() {
+      return sb.from('requests').delete().eq('id', requestId).then(function(result) {
+        if (result.error) {
+          /* 失败回滚 */
+          if (idx >= 0) self.data.requests.splice(idx, 0, req);
+          render();
+          showToast(result.error.message, 'error');
+          return { success: false };
+        }
+        return { success: true };
+      });
+    }).catch(function() {
+      /* 失败回滚 */
+      if (idx >= 0) self.data.requests.splice(idx, 0, req);
+      render();
+      showToast('网络错误，删除失败', 'error');
+      return { success: false };
     });
   },
 
@@ -3022,7 +3267,9 @@ function render() {
 }
 
 /* ===== 事件处理 ===== */
+var submittingRequest = false;
 function handleSubmitRequest() {
+  if (submittingRequest) return;
   var item = document.getElementById('form-item').value.trim();
   var price = document.getElementById('form-price').value.trim();
   var reason = document.getElementById('form-reason').value.trim();
@@ -3035,15 +3282,19 @@ function handleSubmitRequest() {
   var imgIcon = document.querySelector('#req-img-area .img-uploading');
   if (imgIcon) { showToast('图片正在上传，请稍等', 'error'); return; }
 
-  var req = DB.addRequest(item, price, reason, link, requestImageUrl);
-  if (req) {
-    requestImageUrl = null;
-    requestImageRemoved = false;
-    showToast('申请已提交，等待审批...', 'success');
-    navigate('home');
-  } else {
-    showToast('提交失败，请重试', 'error');
-  }
+  submittingRequest = true;
+  showToast('正在提交...', 'info');
+
+  DB.addRequest(item, price, reason, link, requestImageUrl).then(function(result) {
+    submittingRequest = false;
+    if (result && result.success) {
+      requestImageUrl = null;
+      requestImageRemoved = false;
+      showToast('申请已提交，等待审批...', 'success');
+      navigate('home');
+    }
+    /* 失败的情况 addRequest 里已经弹过 toast 了 */
+  });
 }
 
 function handleConfirmAddMember() {
@@ -3057,10 +3308,14 @@ function handleConfirmAddMember() {
   if (!state.modalRoles.isApplicant && !state.modalRoles.isApprover) {
     showToast('请至少选择一个角色', 'error'); return;
   }
-  DB.addMember(name, state.modalSelectedEmoji, state.modalRoles.isApplicant, state.modalRoles.isApprover);
-  showToast('已添加成员 ' + name, 'success');
-  closeModal();
-  render();
+  showToast('正在添加...', 'info');
+  DB.addMember(name, state.modalSelectedEmoji, state.modalRoles.isApplicant, state.modalRoles.isApprover).then(function(result) {
+    if (result && result.success) {
+      showToast('已添加成员 ' + name, 'success');
+      closeModal();
+    }
+    /* 失败的情况 addMember 里已经弹过 toast 了 */
+  });
 }
 
 function handleRemoveMember(id) {
@@ -3070,9 +3325,13 @@ function handleRemoveMember(id) {
   if (member && member.isAdmin) { showToast('管理员不可删除', 'error'); return; }
   if (DB.getMembers().length <= 1) { showToast('至少保留一个成员', 'error'); return; }
   if (member && window.confirm('确定删除 ' + member.name + ' 吗？')) {
-    DB.removeMember(id);
-    showToast('已删除 ' + member.name, 'success');
-    render();
+    showToast('正在删除...', 'info');
+    DB.removeMember(id).then(function(result) {
+      if (result && result.success && !result.failedUpdates) {
+        showToast('已删除 ' + member.name, 'success');
+      }
+      /* 失败或部分失败的情况 removeMember 里已经弹过 toast 了 */
+    });
   }
 }
 
@@ -3080,9 +3339,11 @@ function handleDeleteRequest(requestId) {
   if (!DB.isCurrentUserAdmin()) { showToast('仅管理员可删除记录', 'error'); return; }
   var req = DB.data.requests.find(function(r) { return r.id === requestId; });
   if (req && window.confirm('确定删除这条记录吗？')) {
-    DB.deleteRequest(requestId);
-    showToast('记录已删除', 'success');
-    render();
+    DB.deleteRequest(requestId).then(function(result) {
+      if (result && result.success) {
+        showToast('记录已删除', 'success');
+      }
+    });
   }
 }
 
@@ -3091,36 +3352,39 @@ function handleConfirmDecision() {
   var comment = document.getElementById('modal-comment').value.trim();
   var req = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
   var wasChanging = req && req.votes && req.votes.some(function(v) { return v.userId === (DB.getCurrentUser() || {}).id; });
-  var success = DB.voteRequest(modalContext.requestId, modalContext.action, comment);
-  if (success) {
-    var req2 = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
-    var actionLabel = modalContext.action === 'approved' ? '通过' : '驳回';
-    var votes = (req2 && req2.votes) || [];
-    var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
-    var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+  var actionLabel = modalContext.action === 'approved' ? '通过' : '驳回';
 
-    var msg;
-    if (wasChanging) {
-      msg = '已修改你的投票为「' + actionLabel + '」 📝';
-    } else {
-      msg = '已提交投票：' + actionLabel + ' 🗳️';
+  /* 先关弹窗，保持响应感（本地已乐观更新） */
+  closeModal();
+
+  DB.voteRequest(modalContext.requestId, modalContext.action, comment).then(function(result) {
+    if (result && result.success) {
+      var req2 = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
+      var votes = result.votes || (req2 && req2.votes) || [];
+      var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+      var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+
+      var msg;
+      if (wasChanging) {
+        msg = '已修改你的投票为「' + actionLabel + '」 📝';
+      } else {
+        msg = '已提交投票：' + actionLabel + ' 🗳️';
+      }
+
+      var finalStatus = result.status || (req2 && req2.status);
+      if (finalStatus === 'approved') {
+        msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已通过 🎉';
+      } else if (finalStatus === 'rejected') {
+        msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已驳回';
+      } else if (finalStatus === 'pending') {
+        msg += '\n当前 ' + approveCount + '通过 ' + rejectCount + '驳回，平票中，等待更多人投票';
+      }
+
+      showToast(msg, finalStatus === 'approved' ? 'success' : 'info');
     }
-
-    /* 根据最新投票结果给出提示 */
-    if (req2 && req2.status === 'approved') {
-      msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已通过 🎉';
-    } else if (req2 && req2.status === 'rejected') {
-      msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已驳回';
-    } else if (req2 && req2.status === 'pending') {
-      msg += '\n当前 ' + approveCount + '通过 ' + rejectCount + '驳回，平票中，等待更多人投票';
-    }
-
-    showToast(msg, req2 && req2.status === 'approved' ? 'success' : 'info');
-    closeModal();
+    /* 失败的情况 voteRequest 里已经弹过 toast 了 */
     render();
-  } else {
-    showToast('操作失败', 'error');
-  }
+  });
 }
 
 function handleResetData() {
