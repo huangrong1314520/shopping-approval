@@ -1293,20 +1293,32 @@ var DB = {
   getMyApprovals: function() {
     var user = this.getCurrentUser();
     if (!user) return [];
-    return this.data.requests.filter(function(r) { return r.approverId === user.id && r.status === 'approved'; });
+    return this.data.requests.filter(function(r) {
+      var votes = r.votes || [];
+      return votes.some(function(v) { return v.userId === user.id && v.decision === 'approved'; });
+    });
   },
   getMyRejections: function() {
     var user = this.getCurrentUser();
     if (!user) return [];
-    return this.data.requests.filter(function(r) { return r.approverId === user.id && r.status === 'rejected'; });
+    return this.data.requests.filter(function(r) {
+      var votes = r.votes || [];
+      return votes.some(function(v) { return v.userId === user.id && v.decision === 'rejected'; });
+    });
   },
   getMyStats: function() {
     var user = this.getCurrentUser();
     if (!user) return { applied: 0, approved: 0, rejected: 0, approvedRate: 0, myTotalSpent: 0 };
     var all = this.data.requests;
     var myApplied = all.filter(function(r) { return r.applicantId === user.id; });
-    var myApproved = all.filter(function(r) { return r.approverId === user.id && r.status === 'approved'; });
-    var myRejected = all.filter(function(r) { return r.approverId === user.id && r.status === 'rejected'; });
+    var myApproved = all.filter(function(r) {
+      var votes = r.votes || [];
+      return votes.some(function(v) { return v.userId === user.id && v.decision === 'approved'; });
+    });
+    var myRejected = all.filter(function(r) {
+      var votes = r.votes || [];
+      return votes.some(function(v) { return v.userId === user.id && v.decision === 'rejected'; });
+    });
     var decided = myApproved.length + myRejected.length;
     var myApprovedApplications = all.filter(function(r) { return r.applicantId === user.id && r.status === 'approved'; });
     return {
@@ -2289,7 +2301,6 @@ function renderHome() {
   }
 
   var isAdmin = DB.isCurrentUserAdmin();
-  var myTotalSpent = user ? DB.getMyTotalSpent() : 0;
 
   /* 管理员：各成员消费列表 */
   var adminSpentHtml = '';
@@ -2307,6 +2318,10 @@ function renderHome() {
       '<div class="card">' + listHtml + '</div>';
   }
 
+  /* 个人统计：与"我的"页面一致 */
+  var myStats = user ? DB.getMyStats() : { applied: 0, approved: 0, rejected: 0, myTotalSpent: 0 };
+  var myPendingReview = user ? votablePending || 0 : 0;
+
   return '' +
     '<div class="greeting">' +
       '<div class="greeting-text">' +
@@ -2320,10 +2335,10 @@ function renderHome() {
       '<div class="greeting-sub">' + greetingSub + '</div>' +
     '</div>' +
     '<div class="stats-grid">' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="pending"><div class="stat-icon">⏳</div><div class="stat-value">' + stats.pending + '</div><div class="stat-label">待审批</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + stats.approved + '</div><div class="stat-label">已通过</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + stats.rejected + '</div><div class="stat-label">已驳回</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate" data-view="approve"><div class="stat-icon">⏳</div><div class="stat-value">' + myPendingReview + '</div><div class="stat-label">待我审批</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过的</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回的</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
     '</div>' +
     (quickActions ? '<div class="quick-action">' + quickActions + '</div>' : '') +
     '<div class="section-title">📋 最近动态</div>' +
