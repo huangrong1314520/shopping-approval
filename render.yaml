@@ -1,0 +1,23 @@
+# Render.com 配置文件
+# 部署步骤：
+# 1. 将项目推送到 GitHub
+# 2. 在 Render.com 创建免费 Web Service
+# 3. 连接 GitHub 仓库
+# 4. Render 会自动识别 package.json 并运行 npm start
+# 5. 注意：免费版 15 分钟无流量会休眠，首次访问需等待 30-60 秒冷启动
+
+services:
+  - type: web
+    name: friends-shopping-approval
+    env: node
+    region: singapore  # 新加坡区域
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production

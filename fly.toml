@@ -1,0 +1,32 @@
+# Fly.io 配置文件
+# 部署步骤：
+# 1. 安装 flyctl: https://fly.io/docs/hands-on/install-flyctl/
+# 2. 登录: flyctl auth login
+# 3. 启动应用: flyctl launch
+# 4. 部署: flyctl deploy
+# 5. 打开: flyctl open
+
+app = "friends-shopping-approval"
+primary_region = "nrt"  # 东京区域，亚洲用户访问快
+
+[build]
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = true   # 空闲自动停机（免费额度）
+  auto_start_machines = true  # 有请求自动开机
+  min_machines_running = 0
+
+# 持久化存储卷（保存 data.json）
+[[mounts]]
+  source = "fsp_data"
+  destination = "/data"
+
+[env]
+  PORT = "3000"
+  DATA_FILE = "/data/data.json"
+
+[[vm]]
+  memory = 256
+  process_exec = "node server.js"

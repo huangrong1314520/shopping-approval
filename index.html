@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d1a">
 <meta name="description" content="朋友间共用的购物审批小工具">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>朋友购物审批站</title>
 <style>
 /* ===== Reset & Variables ===== */
@@ -989,6 +992,98 @@ var state = {
   mineFilter: 'all'
 };
 
+/* ===== 通知系统：标签提醒 + 声音提醒 + 弹窗 ===== */
+var NotificationSystem = {
+  soundEnabled: true,
+  originalTitle: '朋友购物审批站',
+  lastNotifyTime: 0,
+
+  /* 播放提示音（Web Audio API，无需外部文件） */
+  playSound: function() {
+    if (!this.soundEnabled) return;
+    try {
+      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      /* 两个音节"叮咚" */
+      var notes = [
+        { freq: 880, delay: 0, duration: 0.15 },
+        { freq: 660, delay: 0.12, duration: 0.2 }
+      ];
+      notes.forEach(function(note) {
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.value = note.freq;
+        osc.type = 'sine';
+        var startTime = audioCtx.currentTime + note.delay;
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.3, startTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + note.duration);
+        osc.start(startTime);
+        osc.stop(startTime + note.duration);
+      });
+    } catch (e) { /* 静默失败 */ }
+  },
+
+  /* 发送通知：声音 + Toast + 浏览器通知 */
+  notify: function(type, title, message) {
+    var now = Date.now();
+    /* 防抖：3秒内不重复通知 */
+    if (now - this.lastNotifyTime < 3000) return;
+    this.lastNotifyTime = now;
+
+    /* 播放声音 */
+    this.playSound();
+
+    /* 显示Toast */
+    showToast(title + '\n' + message, type === 'new_request' ? 'success' : 'info');
+
+    /* 浏览器原生通知（需要授权） */
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        var n = new Notification(title, {
+          body: message,
+          icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🛒</text></svg>',
+          tag: type
+        });
+        n.onclick = function() { window.focus(); n.close(); };
+      } catch (e) { /* 静默失败 */ }
+    }
+  },
+
+  /* 更新标签标题：显示待评审数量 */
+  updateTabTitle: function(requests, user) {
+    if (!user) {
+      document.title = this.originalTitle;
+      return;
+    }
+    var pendingCount = requests.filter(function(r) {
+      return r.applicantId !== user.id && r.status === 'pending';
+    }).length;
+
+    /* 自己申请被投票但还没通过的也算 */
+    var myVotedRequests = requests.filter(function(r) {
+      if (r.applicantId !== user.id) return false;
+      var votes = r.votes || [];
+      return votes.length > 0 && r.status === 'pending';
+    }).length;
+
+    var totalBadge = pendingCount + myVotedRequests;
+    if (totalBadge > 0) {
+      document.title = '(' + totalBadge + ') ' + this.originalTitle;
+    } else {
+      document.title = this.originalTitle;
+    }
+  },
+
+  /* 请求浏览器通知权限 */
+  requestPermission: function() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+};
+
 /* ===== Supabase 配置 ===== */
 var SUPABASE_URL = 'https://klynsbdhtrpmfknzufvc.supabase.co';
 var SUPABASE_KEY = 'sb_publishable_yi8_gBrWGVY-VBSHC-3vuw_eboErvDl';
@@ -1005,6 +1100,7 @@ function mapRequest(r) {
   return { id: r.id,
     applicantId: r.applicant_id, applicantName: r.applicant_name, applicantAvatar: r.applicant_avatar,
     item: r.item, price: Number(r.price), reason: r.reason, link: r.link || '',
+    imageUrl: r.image_url || '',
     status: r.status, votes: r.votes || [],
     approverId: r.approver_id, approverName: r.approver_name, approverAvatar: r.approver_avatar,
     comment: r.comment,
@@ -1041,6 +1137,9 @@ var DB = {
         state.currentUser = null;
         localStorage.removeItem('fsp-user-id');
       }
+      /* 首次加载更新标签标题 */
+      var curUser = state.currentUser ? self.getMember(state.currentUser) : null;
+      NotificationSystem.updateTabTitle(self.data.requests, curUser);
       /* 单独加载收藏（表可能还没建，不阻塞主流程） */
       sb.from('favorites').select('*').order('created_at', { ascending: false }).then(function(result) {
         self.data.favorites = (result.data || []).map(mapFavorite);
@@ -1062,7 +1161,7 @@ var DB = {
       self.refreshMembers();
     }).subscribe();
     sb.channel('requests-ch').on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, function() {
-      self.refreshRequests();
+      self.refreshRequests(true); /* true = 来自实时推送 */
     }).subscribe();
     sb.channel('favorites-ch').on('postgres_changes', { event: '*', schema: 'public', table: 'favorites' }, function() {
       self.refreshFavorites();
@@ -1081,10 +1180,54 @@ var DB = {
     });
   },
 
-  refreshRequests: function() {
+  refreshRequests: function(isRealtime) {
     var self = this;
+    /* 记录旧数据用于检测变化 */
+    var oldRequests = self.data.requests;
+    var oldRequestIds = oldRequests.map(function(r) { return r.id; });
+    var oldVoteCounts = {};
+    oldRequests.forEach(function(r) {
+      var votes = r.votes || [];
+      oldVoteCounts[r.id] = votes.length;
+    });
+
     sb.from('requests').select('*').order('created_at', { ascending: false }).then(function(result) {
       self.data.requests = (result.data || []).map(mapRequest);
+      var newRequests = self.data.requests;
+
+      /* 实时推送时检测新申请和新投票 */
+      if (isRealtime && state.currentUser) {
+        var user = state.currentUser;
+
+        /* 检测新申请（不是自己发起的） */
+        var newForMe = newRequests.filter(function(r) {
+          return r.applicantId !== user.id && oldRequestIds.indexOf(r.id) < 0;
+        });
+        if (newForMe.length > 0) {
+          var names = newForMe.map(function(r) { return r.applicantName; }).join('、');
+          NotificationSystem.notify('new_request', newForMe.length + '条新申请待评审', names + ' 提交了新申请');
+        }
+
+        /* 检测自己的申请有新投票 */
+        newRequests.forEach(function(r) {
+          if (r.applicantId === user.id) {
+            var newVoteCount = (r.votes || []).length;
+            var oldCount = oldVoteCounts[r.id] || 0;
+            if (newVoteCount > oldCount) {
+              var latestVote = (r.votes || [])[newVoteCount - 1];
+              if (latestVote && latestVote.userId !== user.id) {
+                var decision = latestVote.decision === 'approved' ? '✅通过' : '❌驳回';
+                NotificationSystem.notify('new_vote', latestVote.userName + ' ' + decision + '了你的申请',
+                  '"' + r.item + '" — ' + (latestVote.comment || '未填写意见'));
+              }
+            }
+          }
+        });
+      }
+
+      /* 更新标签标题 */
+      NotificationSystem.updateTabTitle(newRequests, state.currentUser);
+
       render();
     });
   },
@@ -1240,7 +1383,7 @@ var DB = {
   },
 
   /* --- 写操作：直接 Supabase 查询 --- */
-  addRequest: function(item, price, reason, link) {
+  addRequest: function(item, price, reason, link, imageUrl) {
     var user = this.getCurrentUser();
     if (!user) return null;
     var id = 'r' + Date.now();
@@ -1248,6 +1391,7 @@ var DB = {
       id: id,
       applicant_id: user.id, applicant_name: user.name, applicant_avatar: user.avatar,
       item: item, price: price, reason: reason, link: link || '',
+      image_url: imageUrl || '',
       status: 'pending', votes: []
     }).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
@@ -1302,6 +1446,17 @@ var DB = {
       updateData.approver_name = user.name;
       updateData.approver_avatar = user.avatar;
       updateData.comment = comment || '';
+    }
+
+    /* 立即更新本地数据，不用等实时推送回来 */
+    req.votes = votes;
+    req.status = newStatus;
+    if (newStatus !== 'pending') {
+      req.approverId = user.id;
+      req.approverName = user.name;
+      req.approverAvatar = user.avatar;
+      req.comment = comment || '';
+      req.decidedAt = Date.now();
     }
 
     sb.from('requests').update(updateData).eq('id', requestId).then(function(result) {
@@ -1430,6 +1585,10 @@ function handleLogin() {
   state.currentUser = member.id;
   localStorage.setItem('fsp-user-id', member.id);
   showToast('登录成功，欢迎回来 ' + member.name + '！', 'success');
+  /* 请求浏览器通知权限 */
+  NotificationSystem.requestPermission();
+  /* 更新标签标题 */
+  NotificationSystem.updateTabTitle(DB.data.requests, member);
   render();
 }
 
@@ -1437,6 +1596,7 @@ function handleLogout() {
   if (!window.confirm('确定退出登录吗？')) return;
   state.currentUser = null;
   localStorage.removeItem('fsp-user-id');
+  document.title = NotificationSystem.originalTitle;
   showToast('已退出登录', 'info');
   render();
 }
@@ -1445,6 +1605,9 @@ function handleLogout() {
 var voteImageFile = null;     /* 待上传的压缩后图片Blob */
 var voteImageUrl = null;      /* 已上传的图片URL（改票时已有的） */
 var voteImageRemoved = false; /* 改票时是否删除了旧图片 */
+
+var requestImageUrl = null;  /* 申请时上传的图片URL */
+var requestImageRemoved = false;
 
 /* 压缩图片：最大800px宽，JPEG 0.7质量，目标<500KB */
 function compressImage(file, callback) {
@@ -1536,6 +1699,47 @@ function resetImageUpload() {
       '<div class="img-upload-icon">📷</div>' +
       '<div class="img-upload-hint">点击上传图片（选填）</div>' +
       '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-vote-image">';
+  }
+}
+
+/* ===== 申请图片上传 ===== */
+function handleRequestImageSelect(input) {
+  var file = input.files[0];
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    showToast('图片太大，请选小于10MB的图片', 'error');
+    return;
+  }
+  var area = document.getElementById('req-img-area');
+  if (!area) return;
+  area.innerHTML = '<div class="img-uploading"><span class="spinner">⟳</span> 压缩中...</div>';
+  compressImage(file, function(blob) {
+    if (!blob) { resetRequestImage(); return; }
+    area.innerHTML = '<div class="img-uploading"><span class="spinner">⟳</span> 上传中...</div>';
+    uploadVoteImage(blob, function(url) {
+      if (!url) { resetRequestImage(); return; }
+      requestImageUrl = url;
+      requestImageRemoved = false;
+      area.classList.add('has-img');
+      area.innerHTML =
+        '<div class="img-preview-wrapper">' +
+          '<img src="' + url + '" class="img-preview" style="max-height:150px">' +
+          '<button class="img-remove-btn" data-action="remove-request-image">✕</button>' +
+        '</div>';
+    });
+  });
+}
+
+function resetRequestImage() {
+  requestImageUrl = null;
+  requestImageRemoved = true;
+  var area = document.getElementById('req-img-area');
+  if (area) {
+    area.classList.remove('has-img');
+    area.innerHTML =
+      '<div class="img-upload-icon">📷</div>' +
+      '<div class="img-upload-hint">添加物品图片（选填）</div>' +
+      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-request-image">';
   }
 }
 
@@ -2052,10 +2256,6 @@ function renderHome() {
   var quickActions = '';
   if (user) {
     quickActions += '<button class="btn btn-primary" data-action="navigate" data-view="submit">📝 发起购物申请</button>';
-    var votablePending = DB.getPendingRequests().filter(function(r) { return r.applicantId !== user.id; });
-    if (votablePending.length > 0) {
-      quickActions += '<button class="btn btn-ghost" data-action="navigate" data-view="approval" style="margin-top:8px">✅ 有 ' + votablePending.length + ' 个待审批</button>';
-    }
   }
 
   var activityHtml;
@@ -2120,15 +2320,15 @@ function renderHome() {
       '<div class="greeting-sub">' + greetingSub + '</div>' +
     '</div>' +
     '<div class="stats-grid">' +
-      '<div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value">' + stats.pending + '</div><div class="stat-label">待审批</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value">' + stats.approved + '</div><div class="stat-label">已通过</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">❌</div><div class="stat-value">' + stats.rejected + '</div><div class="stat-label">已驳回</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myTotalSpent) + '</div><div class="stat-label">' + (isAdmin ? '我的消费' : '我的消费') + '</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="pending"><div class="stat-icon">⏳</div><div class="stat-value">' + stats.pending + '</div><div class="stat-label">待审批</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + stats.approved + '</div><div class="stat-label">已通过</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-history" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + stats.rejected + '</div><div class="stat-label">已驳回</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
     '</div>' +
-    adminSpentHtml +
     (quickActions ? '<div class="quick-action">' + quickActions + '</div>' : '') +
     '<div class="section-title">📋 最近动态</div>' +
-    '<div class="card">' + activityHtml + '</div>';
+    '<div class="card">' + activityHtml + '</div>' +
+    adminSpentHtml;
 }
 
 function renderSubmit() {
@@ -2170,6 +2370,14 @@ function renderSubmit() {
       '<div class="form-group">' +
         '<label class="form-label">链接（选填）</label>' +
         '<input type="url" class="form-input" id="form-link" placeholder="https://...">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">物品图片（选填）</label>' +
+        '<div id="req-img-area" class="img-upload-area" data-action="select-request-image">' +
+          '<div class="img-upload-icon">📷</div>' +
+          '<div class="img-upload-hint">添加物品图片（选填）</div>' +
+          '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-request-image">' +
+        '</div>' +
       '</div>' +
       '<button class="btn btn-primary" data-action="submit-request">📝 提交申请</button>' +
     '</div>' +
@@ -2339,12 +2547,17 @@ function renderSettings() {
   var dataManagementHtml;
   if (isAdmin) {
     dataManagementHtml = '<div class="card">' +
-      '<button class="btn btn-danger" data-action="reset-data">🗑️ 清空所有数据</button>' +
-      '<div style="font-size:12px;color:var(--text-tertiary);margin-top:8px;text-align:center">将清空所有记录，仅保留管理员</div>' +
+      '<button class="btn btn-primary" data-action="backup-data" style="width:100%;margin-bottom:8px">💾 一键备份全部数据</button>' +
+      '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:16px;text-align:center">下载JSON文件，可存到微信文件传输助手</div>' +
+      '<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">' +
+        '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px">高级操作</div>' +
+        '<button style="font-size:12px;color:var(--text-tertiary);background:none;border:1px solid var(--border);border-radius:6px;padding:4px 12px;cursor:pointer" data-action="reset-data">🗑 清空所有数据</button>' +
+        '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;opacity:0.7">危险操作，需验证PIN码</div>' +
+      '</div>' +
     '</div>';
   } else {
     dataManagementHtml = '<div class="card">' +
-      '<div style="text-align:center;color:var(--text-tertiary);font-size:13px;padding:8px">🔒 仅管理员可清空数据</div>' +
+      '<div style="text-align:center;color:var(--text-tertiary);font-size:13px;padding:8px">🔒 仅管理员可管理数据</div>' +
     '</div>';
   }
 
@@ -2377,7 +2590,7 @@ function renderSettings() {
     '<div class="section-title">⚙️ 数据管理</div>' +
     dataManagementHtml +
     accountHtml +
-    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.1 飞书评审+图片版<br>数据云端持久，实时同步</div>';
+    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.2 飞书评审+图片+备份版<br>数据云端持久，实时同步</div>';
 }
 
 /* ===== 组件渲染 ===== */
@@ -2466,6 +2679,7 @@ function renderRequestCard(req, options) {
   }
 
   var linkHtml = req.link ? '<a href="' + Utils.escapeHtml(req.link) + '" target="_blank" class="request-link">🔗 查看链接</a>' : '';
+  var reqImageHtml = req.imageUrl ? '<img src="' + req.imageUrl + '" class="request-image" data-action="view-vote-image" data-url="' + req.imageUrl + '" alt="物品图片" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:pointer">' : '';
   var compactStyle = options.compact ? ' style="padding:12px"' : '';
 
   return '<div class="request-card"' + compactStyle + '>' +
@@ -2481,6 +2695,7 @@ function renderRequestCard(req, options) {
     '<div class="request-item">' + Utils.escapeHtml(req.item) + '</div>' +
     '<div class="request-price">' + Utils.formatPrice(req.price) + '</div>' +
     linkHtml +
+    reqImageHtml +
     '<div class="request-reason">' + Utils.escapeHtml(req.reason) + '</div>' +
     footer +
   '</div>';
@@ -2528,8 +2743,13 @@ function handleSubmitRequest() {
   if (!price || Number(price) <= 0) { showToast('请填写有效价格', 'error'); return; }
   if (!reason) { showToast('请填写购买理由', 'error'); return; }
 
-  var req = DB.addRequest(item, price, reason, link);
+  var imgIcon = document.querySelector('#req-img-area .img-uploading');
+  if (imgIcon) { showToast('图片正在上传，请稍等', 'error'); return; }
+
+  var req = DB.addRequest(item, price, reason, link, requestImageUrl);
   if (req) {
+    requestImageUrl = null;
+    requestImageRemoved = false;
     showToast('申请已提交，等待审批...', 'success');
     navigate('home');
   } else {
@@ -2596,16 +2816,87 @@ function handleConfirmDecision() {
 
 function handleResetData() {
   if (!DB.isCurrentUserAdmin()) { showToast('仅管理员可清空数据', 'error'); return; }
-  if (window.confirm('确定清空所有数据吗？将保留管理员账号，清除全部记录。')) {
-    DB.clearAllData();
-    showToast('数据已清空', 'success');
-    navigate('home');
-  }
+  showClearDataModal();
+}
+
+/* ===== 一键备份 ===== */
+function handleBackupData() {
+  if (!DB.isCurrentUserAdmin()) { showToast('仅管理员可备份数据', 'error'); return; }
+  showToast('正在准备备份数据...', 'info');
+  var now = new Date();
+  var ts = now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0') + '_' +
+    String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+
+  var backup = {
+    backupTime: now.toISOString(),
+    backupDate: ts,
+    version: 'v7.2',
+    members: DB.data.members,
+    requests: DB.data.requests,
+    favorites: DB.data.favorites
+  };
+
+  var json = JSON.stringify(backup, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = '购物审批备份_' + ts + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('备份文件已下载，请存到微信文件传输助手', 'success');
+}
+
+/* ===== 清空数据 PIN 验证弹窗 ===== */
+function showClearDataModal() {
+  if (!DB.isCurrentUserAdmin()) { showToast('仅管理员可清空数据', 'error'); return; }
+  var overlay = document.getElementById('modal-overlay');
+  overlay.innerHTML =
+    '<div class="modal-sheet">' +
+      '<div class="modal-header">' +
+        '<h3>🗑 清空所有数据</h3>' +
+        '<button class="modal-close" data-action="close-modal">✕</button>' +
+      '</div>' +
+      '<div style="padding:16px">' +
+        '<div style="background:rgba(239,170,23,0.1);border:1px solid rgba(239,170,23,0.3);border-radius:8px;padding:12px;margin-bottom:16px">' +
+          '<div style="font-size:13px;color:var(--warning);font-weight:600;margin-bottom:4px">⚠️ 警告</div>' +
+          '<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">此操作将清空所有购物申请记录和成员数据，仅保留管理员账号。此操作不可撤销！</div>' +
+        '</div>' +
+        '<div style="font-size:14px;margin-bottom:8px">请输入管理员PIN码以确认操作：</div>' +
+        '<input type="password" id="clear-pin-input" maxlength="4" inputmode="numeric" placeholder="4位PIN码" style="width:100%;padding:12px;font-size:18px;text-align:center;letter-spacing:8px;border:1px solid var(--border);border-radius:8px;box-sizing:border-box" />' +
+        '<button class="btn btn-danger" data-action="confirm-clear-data" style="width:100%;margin-top:12px">确认清空所有数据</button>' +
+      '</div>' +
+    '</div>';
+  overlay.classList.add('active');
+  setTimeout(function() { var inp = document.getElementById('clear-pin-input'); if (inp) inp.focus(); }, 100);
+}
+
+function handleConfirmClearData() {
+  var user = DB.getCurrentUser();
+  if (!user || !user.isAdmin) { showToast('仅管理员可清空数据', 'error'); return; }
+  var pinInput = document.getElementById('clear-pin-input');
+  var pin = pinInput ? pinInput.value.trim() : '';
+  if (!pin || pin.length !== 4) { showToast('请输入4位PIN码', 'error'); return; }
+  if (pin !== user.pin) { showToast('PIN码错误，操作取消', 'error'); return; }
+
+  closeModal();
+  DB.clearAllData();
+  showToast('数据已清空', 'success');
+  navigate('home');
 }
 
 /* ===== 导航 ===== */
 function navigate(view) {
   closeModal();
+  /* 离开申请页时重置图片状态 */
+  if (state.view === 'submit' && view !== 'submit') {
+    requestImageUrl = null;
+    requestImageRemoved = false;
+  }
   state.view = view;
   render();
 }
@@ -2645,11 +2936,31 @@ document.addEventListener('click', function(e) {
       e.stopPropagation();
       resetImageUpload();
       break;
+    case 'select-request-image':
+      if (target.tagName === 'INPUT') {
+        if (target.files && target.files[0]) handleRequestImageSelect(target);
+      } else {
+        var reqFileInput = target.querySelector('input[type="file"]');
+        if (reqFileInput) reqFileInput.click();
+      }
+      break;
+    case 'remove-request-image':
+      e.stopPropagation();
+      resetRequestImage();
+      break;
     case 'view-vote-image':
       showImageLightbox(target.dataset.url);
       break;
     case 'close-modal':
       closeModal();
+      break;
+    case 'navigate-history':
+      state.historyFilter = target.dataset.filter;
+      navigate('history');
+      break;
+    case 'navigate-mine':
+      state.mineFilter = target.dataset.filter;
+      navigate('mine');
       break;
     case 'filter-history':
       state.historyFilter = target.dataset.filter;
@@ -2696,7 +3007,13 @@ document.addEventListener('click', function(e) {
       handleRemoveMember(target.dataset.id);
       break;
     case 'reset-data':
-      handleResetData();
+      showClearDataModal();
+      break;
+    case 'confirm-clear-data':
+      handleConfirmClearData();
+      break;
+    case 'backup-data':
+      handleBackupData();
       break;
     case 'delete-request':
       handleDeleteRequest(target.dataset.id);
@@ -2742,6 +3059,18 @@ document.addEventListener('click', function(e) {
     case 'confirm-change-pin':
       handleChangePin();
       break;
+    case 'quick-select-user':
+      state.currentUser = target.dataset.id;
+      localStorage.setItem('fsp-user-id', target.dataset.id);
+      closeModal();
+      var swUser = DB.getMember(target.dataset.id);
+      if (swUser) {
+        NotificationSystem.requestPermission();
+        NotificationSystem.updateTabTitle(DB.data.requests, swUser);
+        showToast('已切换到 ' + swUser.name, 'success');
+      }
+      render();
+      break;
     case 'set-mine-filter':
       state.mineFilter = target.dataset.filter;
       render();
@@ -2756,10 +3085,16 @@ document.getElementById('modal-overlay').addEventListener('click', function(e) {
 
 /* 成员名称编辑 - 失焦保存 */
 document.addEventListener('change', function(e) {
-  /* 图片选择 */
+  /* 投票图片选择 */
   var imgInput = e.target.closest('input[type="file"][data-action="select-vote-image"]');
   if (imgInput) {
     if (imgInput.files && imgInput.files[0]) handleImageSelect(imgInput);
+    return;
+  }
+  /* 申请图片选择 */
+  var reqImgInput = e.target.closest('input[type="file"][data-action="select-request-image"]');
+  if (reqImgInput) {
+    if (reqImgInput.files && reqImgInput.files[0]) handleRequestImageSelect(reqImgInput);
     return;
   }
   var target = e.target.closest('[data-action="edit-member-name"]');
@@ -2785,6 +3120,9 @@ document.addEventListener('keydown', function(e) {
     if (loginPin) { handleLogin(); return; }
     var regPinConfirm = e.target.closest('#reg-pin-confirm');
     if (regPinConfirm) { handleRegister(); return; }
+    /* 清空数据PIN输入回车确认 */
+    var clearPin = e.target.closest('#clear-pin-input');
+    if (clearPin) { handleConfirmClearData(); return; }
   }
 });
 
