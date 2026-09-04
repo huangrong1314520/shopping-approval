@@ -336,6 +336,74 @@ body {
 }
 .approval-info .comment { color: var(--text); font-style: italic; }
 
+/* ===== 飞书评审模式 - 投票统计与列表 ===== */
+.vote-summary {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+.vote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.vote-chip.approve { background: rgba(16,185,129,0.15); color: #34d399; }
+.vote-chip.reject { background: rgba(239,68,68,0.15); color: #f87171; }
+.vote-chip.pending { background: rgba(245,158,11,0.15); color: #fbbf24; }
+
+.vote-list {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.vote-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.vote-item:last-child { border-bottom: none; }
+.vote-item .vote-avatar { font-size: 20px; flex-shrink: 0; }
+.vote-item .vote-body { flex: 1; min-width: 0; }
+.vote-item .vote-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.vote-item .vote-name { font-weight: 600; font-size: 13px; }
+.vote-item .vote-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.vote-item .vote-badge.approve { background: rgba(16,185,129,0.15); color: #34d399; }
+.vote-item .vote-badge.reject { background: rgba(239,68,68,0.15); color: #f87171; }
+.vote-item .vote-time { font-size: 11px; color: var(--text-tertiary); margin-left: auto; }
+.vote-item .vote-comment {
+  font-size: 13px;
+  color: var(--text);
+  font-style: italic;
+  margin-top: 2px;
+}
+.vote-item .vote-no-comment { font-size: 12px; color: var(--text-tertiary); }
+.my-vote-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--gradient);
+  color: #fff;
+  margin-left: 4px;
+  font-weight: 600;
+}
+
 /* ===== Filter Tabs ===== */
 .filter-tabs {
   display: flex;
@@ -1123,22 +1191,55 @@ var DB = {
     return true;
   },
 
-  decideRequest: function(requestId, decision, comment) {
+  voteRequest: function(requestId, decision, comment) {
     var user = this.getCurrentUser();
     if (!user) return false;
     var req = this.data.requests.find(function(r) { return r.id === requestId; });
-    if (!req || req.status !== 'pending') return false;
+    if (!req) return false;
     if (req.applicantId === user.id) { showToast('不能审批自己的申请', 'error'); return false; }
+
     var votes = req.votes || [];
-    votes.push({
+    /* 检查是否已投过票（改票） */
+    var existingIdx = -1;
+    for (var i = 0; i < votes.length; i++) {
+      if (votes[i].userId === user.id) { existingIdx = i; break; }
+    }
+    var newVote = {
       userId: user.id, userName: user.name, userAvatar: user.avatar,
       decision: decision, comment: comment || '', votedAt: Date.now()
-    });
-    sb.from('requests').update({
-      status: decision, votes: votes,
-      approver_id: user.id, approver_name: user.name, approver_avatar: user.avatar,
-      comment: comment || '', decided_at: new Date().toISOString()
-    }).eq('id', requestId).then(function(result) {
+    };
+    if (existingIdx >= 0) {
+      votes[existingIdx] = newVote;
+    } else {
+      votes.push(newVote);
+    }
+
+    /* 计算最终状态：一人通过即为已通过（会签模式），全部驳回才驳回 */
+    var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+    var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+    var newStatus;
+    if (approveCount > 0) {
+      newStatus = 'approved';
+    } else if (rejectCount >= 2) {
+      newStatus = 'rejected';
+    } else {
+      newStatus = 'pending';
+    }
+
+    var updateData = {
+      votes: votes,
+      status: newStatus,
+      decided_at: newStatus !== 'pending' ? new Date().toISOString() : null
+    };
+    /* 如果最终决定，记录最后决定者 */
+    if (newStatus !== 'pending') {
+      updateData.approver_id = user.id;
+      updateData.approver_name = user.name;
+      updateData.approver_avatar = user.avatar;
+      updateData.comment = comment || '';
+    }
+
+    sb.from('requests').update(updateData).eq('id', requestId).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
     });
     return true;
@@ -1449,6 +1550,43 @@ function showApprovalModal(requestId, action) {
   }
   modalContext = { requestId: requestId, action: action };
   var isApprove = action === 'approved';
+  var votes = req.votes || [];
+  var myVote = votes.find(function(v) { return v.userId === user.id; });
+
+  /* 已有投票列表 */
+  var existingVotesHtml = '';
+  if (votes.length > 0) {
+    existingVotesHtml = '<div style="margin-bottom:16px">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">📋 已有评审意见（' + votes.length + '人）</div>' +
+      '<div class="vote-list" style="border-top:1px solid var(--border);padding-top:4px">';
+    votes.forEach(function(v) {
+      var isMe = v.userId === user.id;
+      existingVotesHtml +=
+        '<div class="vote-item">' +
+          '<div class="vote-avatar">' + v.userAvatar + '</div>' +
+          '<div class="vote-body">' +
+            '<div class="vote-head">' +
+              '<span class="vote-name">' + Utils.escapeHtml(v.userName) + '</span>' +
+              (isMe ? '<span class="my-vote-tag">我</span>' : '') +
+              '<span class="vote-badge ' + (v.decision === 'approved' ? 'approve' : 'reject') + '">' +
+                (v.decision === 'approved' ? '通过' : '驳回') +
+              '</span>' +
+              '<span class="vote-time">' + Utils.formatTime(v.votedAt) + '</span>' +
+            '</div>' +
+            (v.comment ? '<div class="vote-comment">"' + Utils.escapeHtml(v.comment) + '"</div>' : '<div class="vote-no-comment">未填写意见</div>') +
+          '</div>' +
+        '</div>';
+    });
+    existingVotesHtml += '</div></div>';
+  }
+
+  var changeHint = myVote
+    ? '<div style="font-size:12px;color:var(--warning);margin-bottom:8px;text-align:center">⚠️ 你已投过票（' + (myVote.decision === 'approved' ? '通过' : '驳回') + '），本次将修改你的投票</div>'
+    : '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;text-align:center">飞书评审模式：所有人都能投票，意见实时可见</div>';
+
+  /* 预填已有意见 */
+  var prefillComment = myVote && myVote.comment ? myVote.comment : '';
+
   var overlay = document.getElementById('modal-overlay');
   overlay.innerHTML =
     '<div class="modal-sheet">' +
@@ -1456,7 +1594,7 @@ function showApprovalModal(requestId, action) {
         '<h3>' + (isApprove ? '✅ 通过申请' : '❌ 驳回申请') + '</h3>' +
         '<button class="modal-close" data-action="close-modal">✕</button>' +
       '</div>' +
-      '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:12px;text-align:center">会签模式：你的决定将直接生效</div>' +
+      changeHint +
       '<div class="request-card" style="margin-bottom:16px;border:1px solid var(--border-light)">' +
         '<div class="request-header">' +
           '<div class="avatar">' + req.applicantAvatar + '</div>' +
@@ -1469,13 +1607,14 @@ function showApprovalModal(requestId, action) {
         '<div class="request-price">' + Utils.formatPrice(req.price) + '</div>' +
         '<div class="request-reason">' + Utils.escapeHtml(req.reason) + '</div>' +
       '</div>' +
+      existingVotesHtml +
       '<div class="form-group">' +
-        '<label class="form-label">' + (isApprove ? '审批意见（选填）' : '驳回理由（建议填写）') + '</label>' +
+        '<label class="form-label">' + (isApprove ? '评审意见（选填）' : '驳回理由（建议填写）') + '</label>' +
         '<textarea class="form-textarea" id="modal-comment" placeholder="' +
-          (isApprove ? '说点什么鼓励一下...' : '告诉TA为什么不能买...') + '"></textarea>' +
+          (isApprove ? '说点什么鼓励一下...' : '告诉TA为什么不能买...') + '">' + Utils.escapeHtml(prefillComment) + '</textarea>' +
       '</div>' +
       '<button class="btn ' + (isApprove ? 'btn-success' : 'btn-danger') + '" data-action="confirm-decision">' +
-        (isApprove ? '确认通过' : '确认驳回') +
+        (myVote ? '📝 修改投票' : (isApprove ? '确认通过' : '确认驳回')) +
       '</button>' +
     '</div>';
   overlay.classList.add('active');
@@ -1564,14 +1703,30 @@ function showShareModal(requestId) {
   var req = DB.data.requests.find(function(r) { return r.id === requestId; });
   if (!req) return;
 
+  var votes = req.votes || [];
+  var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+  var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+
   var shareText = '🌸 朋友安利时间！\n\n' +
     req.applicantAvatar + ' ' + req.applicantName + ' 推荐：\n' +
     '📦 ' + req.item + '\n' +
     '💰 ' + Utils.formatPrice(req.price) + '\n';
   if (req.reason) shareText += '💬 理由：' + req.reason + '\n';
   if (req.link) shareText += '🔗 ' + req.link + '\n';
-  shareText += '\n✅ 已由 ' + (req.approverAvatar || '') + ' ' + (req.approverName || '') + ' 审批通过！\n';
-  if (req.comment) shareText += '💬 审批意见：' + req.comment + '\n';
+  shareText += '\n✅ 已通过审批！';
+  if (votes.length > 0) {
+    shareText += '（' + approveCount + '人通过';
+    if (rejectCount > 0) shareText += '，' + rejectCount + '人驳回';
+    shareText += '）\n';
+    /* 列出投票意见 */
+    votes.forEach(function(v) {
+      shareText += v.userAvatar + ' ' + v.userName + '：' + (v.decision === 'approved' ? '✅' : '❌');
+      if (v.comment) shareText += ' - "' + v.comment + '"';
+      shareText += '\n';
+    });
+  } else {
+    shareText += '\n';
+  }
   shareText += '\n—— 来自「朋友购物审批站」';
 
   var encodedText = encodeURIComponent(shareText);
@@ -1819,18 +1974,19 @@ function renderApproval() {
 
   if (!user) return '<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-text">请先登录</div></div>';
 
-  var allPending = DB.getPendingRequests();
-  var votable = allPending.filter(function(r) { return r.applicantId !== user.id; });
-  var myOwn = allPending.filter(function(r) { return r.applicantId === user.id; });
+  /* 飞书评审模式：显示所有非自己发起的申请（不限状态，都可投票） */
+  var allRequests = DB.data.requests;
+  var votable = allRequests.filter(function(r) { return r.applicantId !== user.id; });
+  var myOwn = allRequests.filter(function(r) { return r.applicantId === user.id; });
 
-  if (allPending.length === 0) {
-    return '<div class="empty-state"><div class="empty-icon">🎉</div><div class="empty-text">当前没有待审批的申请<br>朋友们都很克制呢</div></div>';
+  if (votable.length === 0 && myOwn.length === 0) {
+    return '<div class="empty-state"><div class="empty-icon">🎉</div><div class="empty-text">还没有任何申请<br>快去发起第一个吧</div></div>';
   }
 
   var html = '';
   if (votable.length > 0) {
     html += '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' +
-      '📌 会签模式：任何人都可以审批，一人通过即可生效' +
+      '📌 飞书评审模式：所有人都能投票，意见实时可见，一人通过即生效' +
     '</div>';
     html += votable.map(function(r) { return renderRequestCard(r, { showActions: true }); }).join('');
   }
@@ -2005,7 +2161,7 @@ function renderSettings() {
     '<button class="btn btn-primary" data-action="open-add-member" style="margin-top:4px">➕ 添加成员</button>' +
     '<div class="section-title">💡 使用说明</div>' +
     '<div class="card" style="font-size:13px;color:var(--text-secondary);line-height:1.8">' +
-      '<div><strong style="color:var(--text)">会签模式</strong>：任何人都能审批朋友的申请，不能审批自己的</div>' +
+      '<div><strong style="color:var(--text)">飞书评审模式</strong>：所有人都能对申请投票，意见实时可见，一人通过即生效，可改票</div>' +
       '<div><strong style="color:var(--text)">分享安利</strong>：已通过的申请可以复制文字分享到微信</div>' +
       '<div><strong style="color:var(--text)">收藏功能</strong>：在记录中点⭐收藏，个人收藏库在"我的"里查看</div>' +
       '<div><strong style="color:var(--text)">消费统计</strong>：首页显示自己的消费总额，管理员可看所有人的</div>' +
@@ -2014,7 +2170,7 @@ function renderSettings() {
     '<div class="section-title">⚙️ 数据管理</div>' +
     dataManagementHtml +
     accountHtml +
-    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v6.1 Supabase版<br>数据云端持久，实时同步</div>';
+    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.0 飞书评审版<br>数据云端持久，实时同步</div>';
 }
 
 /* ===== 组件渲染 ===== */
@@ -2029,27 +2185,74 @@ function renderRequestCard(req, options) {
   var statusBadge = badgeMap[req.status] || '';
 
   var footer = '';
-  if (options.showActions && req.status === 'pending') {
-    /* 会签模式：不能审批自己的申请 */
-    if (user && req.applicantId === user.id) {
-      footer = '<div class="approval-info"><div style="color:var(--text-tertiary);text-align:center;padding:8px 0">⏳ 等待其他朋友审批...</div></div>';
-    } else {
-      footer = '<div class="action-row">' +
-        '<button class="btn btn-success" data-action="open-approve" data-id="' + req.id + '">✅ 通过</button>' +
-        '<button class="btn btn-danger" data-action="open-reject" data-id="' + req.id + '">❌ 驳回</button>' +
-      '</div>';
+  var votes = req.votes || [];
+  var approveVotes = votes.filter(function(v) { return v.decision === 'approved'; });
+  var rejectVotes = votes.filter(function(v) { return v.decision === 'rejected'; });
+  var myVote = user ? votes.find(function(v) { return v.userId === user.id; }) : null;
+  var hasVoted = !!myVote;
+
+  /* 投票统计条（有投票时显示） */
+  var voteSummaryHtml = '';
+  if (votes.length > 0) {
+    voteSummaryHtml = '<div class="vote-summary">';
+    if (approveVotes.length > 0) {
+      voteSummaryHtml += '<span class="vote-chip approve">✅ ' + approveVotes.length + '人通过</span>';
     }
-  } else if (req.status !== 'pending') {
+    if (rejectVotes.length > 0) {
+      voteSummaryHtml += '<span class="vote-chip reject">❌ ' + rejectVotes.length + '人驳回</span>';
+    }
+    var totalVoters = votes.length;
+    voteSummaryHtml += '<span class="vote-chip pending">🗳️ 共' + totalVoters + '人参与</span>';
+    voteSummaryHtml += '</div>';
+  }
+
+  /* 投票详情列表 */
+  var voteListHtml = '';
+  if (votes.length > 0) {
+    voteListHtml = '<div class="vote-list">';
+    votes.forEach(function(v) {
+      var isMe = user && v.userId === user.id;
+      voteListHtml +=
+        '<div class="vote-item">' +
+          '<div class="vote-avatar">' + v.userAvatar + '</div>' +
+          '<div class="vote-body">' +
+            '<div class="vote-head">' +
+              '<span class="vote-name">' + Utils.escapeHtml(v.userName) + '</span>' +
+              (isMe ? '<span class="my-vote-tag">我</span>' : '') +
+              '<span class="vote-badge ' + (v.decision === 'approved' ? 'approve' : 'reject') + '">' +
+                (v.decision === 'approved' ? '通过' : '驳回') +
+              '</span>' +
+              '<span class="vote-time">' + Utils.formatTime(v.votedAt) + '</span>' +
+            '</div>' +
+            (v.comment
+              ? '<div class="vote-comment">"' + Utils.escapeHtml(v.comment) + '"</div>'
+              : '<div class="vote-no-comment">未填写意见</div>') +
+          '</div>' +
+        '</div>';
+    });
+    voteListHtml += '</div>';
+  }
+
+  if (options.showActions && user && req.applicantId !== user.id) {
+    /* 飞书评审模式：所有人都能投票，不限状态 */
+    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml +
+      '<div class="action-row">' +
+        '<button class="btn btn-success" data-action="open-approve" data-id="' + req.id + '">' +
+          (hasVoted && myVote.decision === 'approved' ? '✅ 已通过（改票）' : '✅ 通过') +
+        '</button>' +
+        '<button class="btn btn-danger" data-action="open-reject" data-id="' + req.id + '">' +
+          (hasVoted && myVote.decision === 'rejected' ? '❌ 已驳回（改票）' : '❌ 驳回') +
+        '</button>' +
+      '</div></div>';
+  } else if (options.showActions && user && req.applicantId === user.id) {
+    /* 申请者自己：只看不能投 */
+    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml +
+      '<div style="color:var(--text-tertiary);text-align:center;padding:8px 0">⏳ 等待朋友评审...</div></div>';
+  } else {
     var favBtn = options.showFavorite && user
       ? '<button class="btn btn-ghost" data-action="toggle-favorite" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">' + (DB.isFavorited(req.id) ? '⭐ 已收藏' : '☆ 收藏') + '</button>'
       : '';
-    footer = '<div class="approval-info">' +
-      '<div class="approver">' +
-        '<span>' + (req.approverAvatar || '') + '</span>' +
-        '<span>' + Utils.escapeHtml(req.approverName || '') + ' · ' + Utils.formatTime(req.decidedAt) + '</span>' +
-      '</div>' +
-      (req.comment ? '<div class="comment">"' + Utils.escapeHtml(req.comment) + '"</div>' : '<div style="color:var(--text-tertiary)">无审批意见</div>') +
-      favBtn +
+    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml + favBtn +
       (req.status === 'approved' ? '<button class="btn btn-ghost" data-action="share-request" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">📤 分享安利</button>' : '') +
     '</div>';
   }
@@ -2163,12 +2366,18 @@ function handleDeleteRequest(requestId) {
 function handleConfirmDecision() {
   if (!modalContext) return;
   var comment = document.getElementById('modal-comment').value.trim();
-  var success = DB.decideRequest(modalContext.requestId, modalContext.action, comment);
+  var req = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
+  var wasChanging = req && req.votes && req.votes.some(function(v) { return v.userId === (DB.getCurrentUser() || {}).id; });
+  var success = DB.voteRequest(modalContext.requestId, modalContext.action, comment);
   if (success) {
-    var req = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
-    var msg = modalContext.action === 'approved'
-      ? '已通过 ' + (req ? req.applicantName : '') + ' 的申请 🎉'
-      : '已驳回 ' + (req ? req.applicantName : '') + ' 的申请 💔';
+    var req2 = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
+    var actionLabel = modalContext.action === 'approved' ? '通过' : '驳回';
+    var msg = wasChanging
+      ? '已修改你的投票为「' + actionLabel + '」 📝'
+      : '已提交投票：' + actionLabel + ' 🗳️';
+    if (req2 && req2.status === 'approved' && modalContext.action === 'approved' && !wasChanging) {
+      msg = '已通过 ' + (req2 ? req2.applicantName : '') + ' 的申请 🎉';
+    }
     showToast(msg, modalContext.action === 'approved' ? 'success' : 'info');
     closeModal();
     render();
