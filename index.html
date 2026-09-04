@@ -2339,6 +2339,21 @@ function renderHome() {
   var myPendingReview = user ? votablePending || 0 : 0;
   var approvedByOthers = user ? DB.getApprovedByOthers().length : 0;
   var rejectedByOthers = user ? DB.getRejectedByOthers().length : 0;
+  var myFavCount = user ? DB.getMyFavorites().length : 0;
+
+  /* 待审批醒目卡片 */
+  var pendingCard = '';
+  if (user && myPendingReview > 0) {
+    pendingCard = '<div class="card" style="cursor:pointer;border:2px solid var(--warning);margin-bottom:12px;padding:16px" data-action="navigate" data-view="approve">' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+        '<div style="font-size:32px">⏳</div>' +
+        '<div style="flex:1">' +
+          '<div style="font-size:16px;font-weight:600;color:var(--warning)">你有 ' + myPendingReview + ' 个申请待审批</div>' +
+          '<div style="font-size:13px;color:var(--text-tertiary)">点击查看并投票</div>' +
+        '</div>' +
+        '<div style="font-size:20px;color:var(--text-tertiary)">›</div>' +
+      '</div></div>';
+  }
 
   return '' +
     '<div class="greeting">' +
@@ -2352,17 +2367,15 @@ function renderHome() {
       '</div>' +
       '<div class="greeting-sub">' + greetingSub + '</div>' +
     '</div>' +
-    '<div class="stats-grid">' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate" data-view="approve"><div class="stat-icon">⏳</div><div class="stat-value">' + myPendingReview + '</div><div class="stat-label">待我审批</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过他人</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回他人</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved-by-others"><div class="stat-icon">🎉</div><div class="stat-value">' + approvedByOthers + '</div><div class="stat-label">他人通过我</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected-by-others"><div class="stat-icon">💔</div><div class="stat-value">' + rejectedByOthers + '</div><div class="stat-label">他人驳回我</div></div>' +
-    '</div>' +
     (quickActions ? '<div class="quick-action">' + quickActions + '</div>' : '') +
+    pendingCard +
     '<div class="section-title">📋 最近动态</div>' +
     '<div class="card">' + activityHtml + '</div>' +
+    /* 快捷入口：我的消费 + 收藏 */
+    (user ? '<div class="stats-grid" style="margin-top:16px">' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="favorites"><div class="stat-icon">⭐</div><div class="stat-value">' + myFavCount + '</div><div class="stat-label">我的收藏</div></div>' +
+    '</div>' : '') +
     adminSpentHtml;
 }
 
