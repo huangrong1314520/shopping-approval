@@ -2346,10 +2346,14 @@ function renderHeader() {
 function renderTabBar() {
   var user = DB.getCurrentUser();
   var pendingCount = DB.getPendingRequests().length;
-  /* 会签模式：排除自己的申请，只显示可投票的 */
+  /* Tab红点：只算我还没投票的 */
   var votableCount = 0;
   if (user) {
-    votableCount = DB.getPendingRequests().filter(function(r) { return r.applicantId !== user.id; }).length;
+    votableCount = DB.getPendingRequests().filter(function(r) {
+      if (r.applicantId === user.id) return false;
+      var votes = r.votes || [];
+      return !votes.some(function(v) { return v.userId === user.id; });
+    }).length;
   }
   var tabbar = document.getElementById('tabbar');
   var html = TABS.map(function(tab) {
@@ -2373,9 +2377,14 @@ function renderHome() {
 
   var greetingSub = '去设置里选择你的身份吧';
   if (user) {
-    var votablePending = DB.getPendingRequests().filter(function(r) { return r.applicantId !== user.id; }).length;
-    if (votablePending > 0) {
-      greetingSub = '你有 ' + votablePending + ' 个申请待审批 📬';
+    /* 待我投票：别人发起的 + 待审批 + 我还没投过票 */
+    var pendingForMe = DB.getPendingRequests().filter(function(r) {
+      if (r.applicantId === user.id) return false;
+      var votes = r.votes || [];
+      return !votes.some(function(v) { return v.userId === user.id; });
+    }).length;
+    if (pendingForMe > 0) {
+      greetingSub = '你有 ' + pendingForMe + ' 个申请待投票 📬';
     } else {
       greetingSub = '可以发起申请，也可以审批朋友的申请 🔄';
     }
@@ -2436,19 +2445,19 @@ function renderHome() {
 
   /* 个人统计：与"我的"页面一致 */
   var myStats = user ? DB.getMyStats() : { applied: 0, approved: 0, rejected: 0, myTotalSpent: 0 };
-  var myPendingReview = user ? votablePending || 0 : 0;
+  var myPendingReview = user ? (typeof pendingForMe !== 'undefined' ? pendingForMe : 0) : 0;
   var approvedByOthers = user ? DB.getApprovedByOthers().length : 0;
   var rejectedByOthers = user ? DB.getRejectedByOthers().length : 0;
   var myFavCount = user ? DB.getMyFavorites().length : 0;
 
-  /* 待审批醒目卡片 */
+  /* 待我投票醒目卡片 */
   var pendingCard = '';
   if (user && myPendingReview > 0) {
-    pendingCard = '<div class="card" style="cursor:pointer;border:2px solid var(--warning);margin-bottom:12px;padding:16px" data-action="navigate-approval-pending">' +
+    pendingCard = '<div class="card" style="cursor:pointer;border:2px solid var(--warning);margin-bottom:12px;padding:16px" data-action="navigate-approval-unvoted">' +
       '<div style="display:flex;align-items:center;gap:12px">' +
         '<div style="font-size:32px">⏳</div>' +
         '<div style="flex:1">' +
-          '<div style="font-size:16px;font-weight:600;color:var(--warning)">你有 ' + myPendingReview + ' 个申请待审批</div>' +
+          '<div style="font-size:16px;font-weight:600;color:var(--warning)">你有 ' + myPendingReview + ' 个申请待投票</div>' +
           '<div style="font-size:13px;color:var(--text-tertiary)">点击查看并投票</div>' +
         '</div>' +
         '<div style="font-size:20px;color:var(--text-tertiary)">›</div>' +
@@ -2542,21 +2551,27 @@ function renderApproval() {
   var allVotable = allRequests.filter(function(r) { return r.applicantId !== user.id; });
   var myOwn = allRequests.filter(function(r) { return r.applicantId === user.id && r.status === 'pending'; });
 
+  /* 判断我是否投过票 */
+  function hasMyVote(r) {
+    var votes = r.votes || [];
+    return votes.some(function(v) { return v.userId === user.id; });
+  }
+
   /* 筛选 */
-  var filter = state.approvalFilter || 'pending';
+  var filter = state.approvalFilter || 'unvoted';
   var votable;
-  if (filter === 'pending') {
-    votable = allVotable.filter(function(r) { return r.status === 'pending'; });
-  } else if (filter === 'decided') {
-    votable = allVotable.filter(function(r) { return r.status !== 'pending'; });
+  if (filter === 'unvoted') {
+    votable = allVotable.filter(function(r) { return r.status === 'pending' && !hasMyVote(r); });
+  } else if (filter === 'voted') {
+    votable = allVotable.filter(function(r) { return hasMyVote(r); });
   } else {
     votable = allVotable;
   }
 
   var filters = [
-    { id: 'pending',  label: '待我审批', count: allVotable.filter(function(r) { return r.status === 'pending'; }).length },
-    { id: 'decided',  label: '已决定',   count: allVotable.filter(function(r) { return r.status !== 'pending'; }).length },
-    { id: 'all',      label: '全部',     count: allVotable.length }
+    { id: 'unvoted', label: '待我投票', count: allVotable.filter(function(r) { return r.status === 'pending' && !hasMyVote(r); }).length },
+    { id: 'voted',   label: '我已投票', count: allVotable.filter(function(r) { return hasMyVote(r); }).length },
+    { id: 'all',     label: '全部',     count: allVotable.length }
   ];
 
   var filterTabsHtml = '<div class="filter-tabs">' +
@@ -2575,10 +2590,10 @@ function renderApproval() {
   var html = filterTabsHtml;
 
   var hintText = '';
-  if (filter === 'pending') {
-    hintText = '📌 待我审批：通过人数>驳回人数才通过，48小时内未决自动驳回，可改票';
-  } else if (filter === 'decided') {
-    hintText = '📌 已决定的申请仍可改票，改票后可能改变结果';
+  if (filter === 'unvoted') {
+    hintText = '📌 你还没投票的申请：通过人数>驳回人数才通过，48小时内未决自动驳回';
+  } else if (filter === 'voted') {
+    hintText = '📌 你已参与投票的申请，仍可改票改变结果';
   } else {
     hintText = '📌 多人评审制：通过人数>驳回人数才通过，48小时内未决自动驳回，可改票';
   }
@@ -2587,9 +2602,10 @@ function renderApproval() {
     html += '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + hintText + '</div>';
     html += votable.map(function(r) { return renderRequestCard(r, { showActions: true }); }).join('');
   } else if (allVotable.length > 0) {
-    html += '<div class="card" style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px">' +
-      (filter === 'pending' ? '✅ 没有待审批的申请' : '暂无记录') +
-    '</div>';
+    var emptyTip = '暂无记录';
+    if (filter === 'unvoted') emptyTip = '✅ 没有需要你投票的新申请';
+    if (filter === 'voted') emptyTip = '你还没有投过任何票';
+    html += '<div class="card" style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px">' + emptyTip + '</div>';
   }
 
   if (myOwn.length > 0) {
@@ -3205,8 +3221,8 @@ document.addEventListener('click', function(e) {
       state.mineFilter = target.dataset.filter;
       navigate('mine');
       break;
-    case 'navigate-approval-pending':
-      state.approvalFilter = 'pending';
+    case 'navigate-approval-unvoted':
+      state.approvalFilter = 'unvoted';
       navigate('approval');
       break;
     case 'filter-history':
