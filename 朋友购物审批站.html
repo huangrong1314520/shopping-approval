@@ -1265,20 +1265,32 @@ var DB = {
         req.status = correctStatus;
         if (correctStatus === 'pending') {
           req.decidedAt = null;
+          req.approverId = null;
+          req.approverName = null;
+          req.approverAvatar = null;
+          req.comment = null;
         } else if (!req.decidedAt) {
           req.decidedAt = Date.now();
         }
         toFix.push({
           id: req.id,
           status: correctStatus,
-          decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString())
+          decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()),
+          clearApprover: correctStatus === 'pending'
         });
       }
     });
 
     /* 批量更新到数据库 */
     toFix.forEach(function(fix) {
-      sb.from('requests').update({ status: fix.status, decided_at: fix.decidedAt }).eq('id', fix.id).then(function(result) {
+      var updateData = { status: fix.status, decided_at: fix.decidedAt };
+      if (fix.clearApprover) {
+        updateData.approver_id = null;
+        updateData.approver_name = null;
+        updateData.approver_avatar = null;
+        updateData.comment = null;
+      }
+      sb.from('requests').update(updateData).eq('id', fix.id).then(function(result) {
         if (result && result.error) console.log('校正失败:', result.error);
       }).catch(function(e) { console.log('校正异常:', e); });
     });
@@ -1527,12 +1539,17 @@ var DB = {
       status: newStatus,
       decided_at: newStatus !== 'pending' ? new Date().toISOString() : null
     };
-    /* 如果最终决定，记录最后决定者 */
+    /* 如果最终决定，记录最后决定者；回到待定则清空 */
     if (newStatus !== 'pending') {
       updateData.approver_id = user.id;
       updateData.approver_name = user.name;
       updateData.approver_avatar = user.avatar;
       updateData.comment = comment || '';
+    } else {
+      updateData.approver_id = null;
+      updateData.approver_name = null;
+      updateData.approver_avatar = null;
+      updateData.comment = null;
     }
 
     /* 立即更新本地数据，不用等实时推送回来 */
@@ -1544,6 +1561,12 @@ var DB = {
       req.approverAvatar = user.avatar;
       req.comment = comment || '';
       req.decidedAt = Date.now();
+    } else {
+      req.approverId = null;
+      req.approverName = null;
+      req.approverAvatar = null;
+      req.comment = null;
+      req.decidedAt = null;
     }
 
     sb.from('requests').update(updateData).eq('id', requestId).then(function(result) {
@@ -1617,6 +1640,7 @@ var DB = {
   },
 
   deleteRequest: function(requestId) {
+    sb.from('favorites').delete().eq('request_id', requestId).catch(function() {});
     sb.from('requests').delete().eq('id', requestId).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
     });
@@ -1624,6 +1648,7 @@ var DB = {
 
   clearAllData: function() {
     sb.from('requests').delete().neq('id', '').then(function() {
+      sb.from('favorites').delete().neq('id', '').catch(function() {});
       sb.from('members').delete().neq('id', 'm1').then(function(result) {
         if (result.error) showToast(result.error.message, 'error');
       });
@@ -2012,6 +2037,12 @@ function showApprovalModal(requestId, action) {
   var user = DB.getCurrentUser();
   if (user && req.applicantId === user.id) {
     showToast('不能审批自己的申请', 'error');
+    return;
+  }
+  /* 48小时投票截止检查：打开弹窗前就提示 */
+  var deadline = req.createdAt + 48 * 60 * 60 * 1000;
+  if (Date.now() > deadline) {
+    showToast('该申请投票已截止（超过48小时），无法再投票', 'error');
     return;
   }
   modalContext = { requestId: requestId, action: action };
@@ -2499,7 +2530,7 @@ function renderApproval() {
   /* 多人评审制：显示所有非自己发起的申请（不限状态，都可投票） */
   var allRequests = DB.data.requests;
   var votable = allRequests.filter(function(r) { return r.applicantId !== user.id; });
-  var myOwn = allRequests.filter(function(r) { return r.applicantId === user.id; });
+  var myOwn = allRequests.filter(function(r) { return r.applicantId === user.id && r.status === 'pending'; });
 
   if (votable.length === 0 && myOwn.length === 0) {
     return '<div class="empty-state"><div class="empty-icon">🎉</div><div class="empty-text">还没有任何申请<br>快去发起第一个吧</div></div>';
@@ -2508,7 +2539,7 @@ function renderApproval() {
   var html = '';
   if (votable.length > 0) {
     html += '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' +
-      '📌 多数决评审：所有人都能投票，通过人数大于驳回人数才通过，可改票' +
+      '📌 多人评审制：通过人数>驳回人数才通过，48小时内未决自动驳回，可改票' +
     '</div>';
     html += votable.map(function(r) { return renderRequestCard(r, { showActions: true }); }).join('');
   }
