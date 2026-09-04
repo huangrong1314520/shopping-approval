@@ -1195,6 +1195,9 @@ var DB = {
       self.data.requests = (result.data || []).map(mapRequest);
       var newRequests = self.data.requests;
 
+      /* 自动校正旧数据状态（从"一人通过即生效"迁移到"多数决"） */
+      self.recalibrateStatuses(newRequests);
+
       /* 实时推送时检测新申请和新投票 */
       if (isRealtime && state.currentUser) {
         var user = state.currentUser;
@@ -1229,6 +1232,34 @@ var DB = {
       NotificationSystem.updateTabTitle(newRequests, state.currentUser);
 
       render();
+    });
+  },
+
+  /* 自动校正旧数据状态：按多数决重新计算，与数据库同步 */
+  recalibrateStatuses: function(requests) {
+    var toFix = [];
+    requests.forEach(function(req) {
+      var votes = req.votes || [];
+      var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+      var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+      var correctStatus;
+      if (approveCount > rejectCount) correctStatus = 'approved';
+      else if (rejectCount > approveCount) correctStatus = 'rejected';
+      else correctStatus = 'pending';
+
+      if (req.status !== correctStatus) {
+        req.status = correctStatus;
+        if (correctStatus === 'pending') {
+          req.decidedAt = null;
+        } else if (!req.decidedAt) {
+          req.decidedAt = Date.now();
+        }
+        toFix.push({ id: req.id, status: correctStatus, decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()) });
+      }
+    });
+    /* 批量更新到数据库 */
+    toFix.forEach(function(fix) {
+      sb.from('requests').update({ status: fix.status, decided_at: fix.decidedAt }).eq('id', fix.id).then(function() {});
     });
   },
 
