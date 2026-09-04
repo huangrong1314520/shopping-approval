@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI做东西入门指南 · 给零基础朋友</title>
+<style>
+:root {
+  --bg: #0d0d1a;
+  --bg-card: #1a1a2e;
+  --bg-input: #252540;
+  --border: #2d2d4a;
+  --text: #e8e8f0;
+  --text-secondary: #9999b0;
+  --primary: #7c3aed;
+  --primary-light: #a78bfa;
+  --gradient: linear-gradient(135deg, #7c3aed, #ec4899);
+  --success: #10b981;
+  --warning: #f59e0b;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: 760px; margin: 0 auto; padding: 24px 16px 80px; }
+
+.hero {
+  text-align: center;
+  padding: 48px 0 36px;
+}
+.hero-emoji { font-size: 56px; margin-bottom: 12px; }
+.hero h1 {
+  font-size: 28px;
+  font-weight: 800;
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+}
+.hero p { color: var(--text-secondary); font-size: 15px; }
+
+.section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.section h2 {
+  font-size: 19px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section h2 .icon { font-size: 22px; }
+.section h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 20px 0 8px;
+  color: var(--primary-light);
+}
+
+.card {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.card-title { font-size: 16px; font-weight: 700; }
+.badge {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-free { background: rgba(16,185,129,0.15); color: #34d399; }
+.badge-paid { background: rgba(245,158,11,0.15); color: #fbbf24; }
+.badge-best { background: rgba(124,58,237,0.15); color: var(--primary-light); }
+
+.steps { list-style: none; counter-reset: step; }
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 36px;
+  padding-bottom: 16px;
+  border-left: 2px solid var(--border);
+  margin-left: 14px;
+}
+.steps li:last-child { border-left: 2px solid transparent; padding-bottom: 0; }
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: -14px;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  background: var(--gradient);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+.table th, .table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.table th { color: var(--text-secondary); font-weight: 600; font-size: 13px; }
+.table td { color: var(--text); }
+
+.tip {
+  background: rgba(124,58,237,0.08);
+  border: 1px solid rgba(124,58,237,0.2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  font-size: 14px;
+  color: var(--text);
+}
+.tip strong { color: var(--primary-light); }
+.tip-success {
+  background: rgba(16,185,129,0.08);
+  border-color: rgba(16,185,129,0.2);
+}
+.tip-success strong { color: #34d399; }
+.tip-warn {
+  background: rgba(245,158,11,0.08);
+  border-color: rgba(245,158,11,0.2);
+}
+.tip-warn strong { color: #fbbf24; }
+
+.combo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-input);
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+.combo .arrow { color: var(--primary-light); font-size: 18px; flex-shrink: 0; }
+.combo .label { font-weight: 600; white-space: nowrap; }
+
+.footer {
+  text-align: center;
+  padding: 24px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+a { color: var(--primary-light); text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-emoji">🚀</div>
+    <h1>AI做东西入门指南</h1>
+    <p>零基础也能用AI做出自己的工具 · 2026年最新版</p>
+  </div>
+
+  <!-- 开场白 -->
+  <div class="section">
+    <h2><span class="icon">💡</span>先搞懂一件事</h2>
+    <p style="margin-bottom:12px">2026年了，做东西不需要会写代码。你只需要做两件事：</p>
+    <div class="combo"><span class="label">① 用嘴描述需求</span><span class="arrow">→</span><span class="label">② AI帮你做出来</span></div>
+    <p style="margin-top:12px;color:var(--text-secondary)">就像你跟装修师傅说"我要一个三室一厅、主卧朝南、厨房带岛台"，师傅就给你盖出来了。AI就是那个师傅，你是说需求的人。</p>
+    <div class="tip tip-success">
+      <strong>核心秘诀：</strong>需求说得越详细，AI做得越准。比如别说"做个网站"，要说"做一个记账App，有收入和支出分类，能看月度统计图，深色主题，手机用"。
+    </div>
+  </div>
+
+  <!-- 第一部分：选哪个平台 -->
+  <div class="section">
+    <h2><span class="icon">🎯</span>第一步：选平台</h2>
+    <p style="margin-bottom:16px">根据你想做什么，选不同的平台：</p>
+
+    <!-- 类型A -->
+    <h3>📐 想做完整App / 网站（带登录、数据存储）</h3>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Lovable（推荐首选）</span>
+        <span class="badge badge-free">免费起步</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：lovable.dev</p>
+      <p style="font-size:14px">最推荐给零基础的人。你说一句话，它直接生成完整App，自带登录、数据库、部署一条龙。代码质量高，能直接交给工程师继续维护。</p>
+      <p style="font-size:13px;color:var(--text-secondary);margin-top:8px">免费：每天5条消息额度。付费$25/月不限量。</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Bolt.new</span>
+        <span class="badge badge-free">免费起步</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：bolt.new</p>
+      <p style="font-size:14px">出原型最快，适合想快速看效果的人。浏览器里直接运行，不用配环境。但后端功能不如Lovable完善。</p>
+      <p style="font-size:13px;color:var(--text-secondary);margin-top:8px">免费：每天300K token。付费$20/月起。</p>
+    </div>
+
+    <!-- 类型B -->
+    <h3>🎨 想做网页界面 / UI设计</h3>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">v0（Vercel出品）</span>
+        <span class="badge badge-free">免费起步</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：v0.dev</p>
+      <p style="font-size:14px">设计感最强，适合做落地页、展示页、管理后台界面。生成的代码质量极高，可以直接拿去给工程师用。</p>
+      <p style="font-size:13px;color:var(--text-secondary);margin-top:8px">免费：每月有额度。付费$20/月起。</p>
+    </div>
+
+    <!-- 类型C -->
+    <h3>💻 想学写代码 / 想深度定制</h3>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Trae（字节出品）</span>
+        <span class="badge badge-best">永久免费</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：trae.ai</p>
+      <p style="font-size:14px">这就是你朋友做购物审批站用的工具。完全免费，中文支持最好，适合想从头到尾自己掌控代码的人。需要安装到电脑上，有一点学习门槛。</p>
+      <p style="font-size:13px;color:var(--text-secondary);margin-top:8px">免费：基础功能永久免费。</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">豆包MarsCode</span>
+        <span class="badge badge-best">完全免费</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：marscode.com</p>
+      <p style="font-size:14px">浏览器打开就能写，不用装任何东西。支持100多种编程语言，还能和飞书联动，适合纯新手体验。</p>
+    </div>
+
+    <!-- 类型D -->
+    <h3>📊 不想碰代码，只想做个工具用</h3>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Softr + Airtable</span>
+        <span class="badge badge-free">免费起步</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：softr.io</p>
+      <p style="font-size:14px">完全不写代码。Airtable当数据库（像Excel），Softr当界面。拖拽搭出会员系统、库存管理、项目看板等。适合做内部管理工具。</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Bubble</span>
+        <span class="badge badge-free">免费起步</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:14px;margin-bottom:8px">地址：bubble.io</p>
+      <p style="font-size:14px">最老牌的无代码平台，功能最全。现在加了AI生成功能，描述需求就能生成应用。适合做复杂逻辑的App。</p>
+    </div>
+  </div>
+
+  <!-- 第二部分：具体步骤 -->
+  <div class="section">
+    <h2><span class="icon">📝</span>第二步：实操步骤</h2>
+
+    <h3>路线A：用 Lovable 做完整App（最简单）</h3>
+    <ol class="steps">
+      <li>
+        <strong>打开 lovable.dev</strong>，注册一个账号（Google或GitHub登录）
+      </li>
+      <li>
+        <strong>点"Start Building"</strong>，用中文描述你要做什么。比如："做一个读书笔记App，能记录书名、作者、笔记内容、评分，按日期排序，深色风格，手机优先"
+      </li>
+      <li>
+        <strong>等AI生成</strong>，大约30秒-1分钟，会生成完整界面+数据库+登录
+      </li>
+      <li>
+        <strong>看效果不满意就继续说</strong>，比如"加一个搜索框""改成粉色主题""增加导出功能"，AI会接着改
+      </li>
+      <li>
+        <strong>点"Publish"发布</strong>，会给你一个网址，直接分享给朋友用
+      </li>
+      <li>
+        <strong>（可选）绑定自己的域名</strong>，在设置里输入域名，Lovable帮你配置
+      </li>
+    </ol>
+    <div class="tip">
+      <strong>需求描述模板：</strong>"做一个【什么App】，有【功能1】【功能2】【功能3】，用户可以【操作1】【操作2】，【风格要求】，【设备要求】"
+    </div>
+
+    <h3>路线B：用 Trae 从零搭（最灵活）</h3>
+    <ol class="steps">
+      <li>
+        <strong>下载安装 Trae</strong>：去 trae.ai 下载对应你电脑系统的版本，安装
+      </li>
+      <li>
+        <strong>新建项目</strong>：打开Trae，新建一个文件夹作为项目目录
+      </li>
+      <li>
+        <strong>用中文描述需求</strong>：在对话框里详细描述你要做什么，越详细越好。比如"做一个HTML单页应用，功能是XXX，用深色主题，要手机适配，数据用localStorage存储"
+      </li>
+      <li>
+        <strong>AI帮你生成代码</strong>：Trae会自动创建文件、写代码，你只需要看结果
+      </li>
+      <li>
+        <strong>需要数据存储</strong>：注册 supabase.com（免费），创建项目，把URL和Key告诉AI，AI帮你接入
+      </li>
+      <li>
+        <strong>需要上线</strong>：注册 github.com，把代码推上去，用 GitHub Pages 免费获得网址
+      </li>
+      <li>
+        <strong>后续修改</strong>：直接在Trae里跟AI说"改成XXX"，AI修改后推送，网站自动更新
+      </li>
+    </ol>
+    <div class="tip tip-warn">
+      <strong>注意：</strong>Trae需要装在电脑上（Windows/Mac），不能在手机上用。如果只想在手机上操作，选路线A。
+    </div>
+
+    <h3>路线C：用 Softr 做管理工具（完全不碰代码）</h3>
+    <ol class="steps">
+      <li>
+        <strong>注册 airtable.com</strong>，创建一个表格，像填Excel一样填入你的数据字段
+      </li>
+      <li>
+        <strong>注册 softr.io</strong>，选"Create New App"
+      </li>
+      <li>
+        <strong>连接Airtable</strong>，选你刚创建的表格
+      </li>
+      <li>
+        <strong>选模板或用AI生成</strong>，Softr会根据你的数据自动生成界面
+      </li>
+      <li>
+        <strong>拖拽调整</strong>，改文字、颜色、布局，全部可视化操作
+      </li>
+      <li>
+        <strong>发布</strong>，获得网址，分享给别人用
+      </li>
+    </ol>
+  </div>
+
+  <!-- 第三部分：费用一览 -->
+  <div class="section">
+    <h2><span class="icon">💰</span>第三步：费用一览</h2>
+    <p style="margin-bottom:12px">大部分AI工具都是"免费起步+付费扩容"模式，对个人使用来说基本可以零成本：</p>
+    <table class="table">
+      <tr>
+        <th>项目</th>
+        <th>免费额度</th>
+        <th>付费起步</th>
+        <th>什么时候需要付费</th>
+      </tr>
+      <tr>
+        <td>Lovable</td>
+        <td>每天5条消息</td>
+        <td>$25/月</td>
+        <td>每天5条够日常迭代，正式运营才需付费</td>
+      </tr>
+      <tr>
+        <td>Bolt.new</td>
+        <td>每天300K token</td>
+        <td>$20/月</td>
+        <td>做大型项目token不够时</td>
+      </tr>
+      <tr>
+        <td>v0</td>
+        <td>每月有额度</td>
+        <td>$20/月</td>
+        <td>频繁生成UI时</td>
+      </tr>
+      <tr>
+        <td>Trae</td>
+        <td>永久免费</td>
+        <td>—</td>
+        <td>个人使用不需要付费</td>
+      </tr>
+      <tr>
+        <td>豆包MarsCode</td>
+        <td>完全免费</td>
+        <td>—</td>
+        <td>个人使用不需要付费</td>
+      </tr>
+      <tr>
+        <td>Supabase（数据库）</td>
+        <td>500MB存储</td>
+        <td>$25/月</td>
+        <td>数据量超过500MB时</td>
+      </tr>
+      <tr>
+        <td>GitHub Pages（网站托管）</td>
+        <td>完全免费</td>
+        <td>—</td>
+        <td>个人项目不需要付费</td>
+      </tr>
+      <tr>
+        <td>Netlify（网站托管）</td>
+        <td>100GB/月流量</td>
+        <td>$19/月</td>
+        <td>流量超100GB时（很难超）</td>
+      </tr>
+      <tr>
+        <td>Softr</td>
+        <td>免费版可用</td>
+        <td>$49/月</td>
+        <td>需要自定义域名或更多用户时</td>
+      </tr>
+    </table>
+    <div class="tip tip-success">
+      <strong>结论：</strong>个人用、朋友圈用、小项目，全程零成本完全没问题。只有当用户量大了、需要自定义域名了，才考虑付费。
+    </div>
+  </div>
+
+  <!-- 第四部分：不同行业建议 -->
+  <div class="section">
+    <h2><span class="icon">🧑‍💼</span>不同行业的朋友适合做什么</h2>
+    <div class="card">
+      <div class="card-header"><span class="card-title">📋 教师 / 培训师</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：作业打卡器、课程评分表、学生积分管理、排课表。<br>推荐：Lovable（快速出App）或 Softr（表格管理）</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">🛒 电商 / 开店</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：库存管理、客户记账本、团购统计、选品投票。<br>推荐：Softr + Airtable（数据管理强）</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">📊 财务 / 行政</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：报销审批、预算追踪、会议纪要管理、考勤统计。<br>推荐：Lovable（审批流程）或 Bubble（复杂逻辑）</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">🎨 设计 / 内容</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：作品集网站、内容灵感板、客户需求收集表。<br>推荐：v0（设计感最强）</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">🏠 自由职业 / 个人</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：个人主页、客户管理表、项目进度跟踪、报价生成器。<br>推荐：Lovable（全能）或 v0（好看）</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">💪 健身 / 健康</span></div>
+      <p style="font-size:14px;color:var(--text-secondary)">可做：训练打卡、饮食记录、体重趋势图、健身计划表。<br>推荐：Lovable（带图表）或 Softr</p>
+    </div>
+  </div>
+
+  <!-- 第五部分：黄金法则 -->
+  <div class="section">
+    <h2><span class="icon">⭐</span>写给零基础朋友的5条黄金法则</h2>
+    <div class="tip">
+      <strong>1. 需求要具体</strong><br>
+      ❌ "做个好用的App"<br>
+      ✅ "做一个记账App，能记收入和支出，有分类标签，底部有5个Tab栏，深色主题"
+    </div>
+    <div class="tip">
+      <strong>2. 分步走，不要一口吃成胖子</strong><br>
+      先做最核心的功能，跑通了再加功能。别第一次就要求做10个页面的完整系统。
+    </div>
+    <div class="tip">
+      <strong>3. 不满意就继续说</strong><br>
+      AI做出来的东西不完美很正常，直接说"这里不对，改成XXX"，AI会迭代修改。一般3-5轮对话就能达到满意。
+    </div>
+    <div class="tip">
+      <strong>4. 找参考</strong><br>
+      看到喜欢的App或网站，截图发给AI说"我要类似这样的"，比纯文字描述效果好10倍。
+    </div>
+    <div class="tip tip-success">
+      <strong>5. 做不出来别硬扛，换个平台试</strong><br>
+      每个AI平台各有强项，Lovable做不出来的问题Bolt可能秒解。多试几个，找到顺手的就是了。
+    </div>
+  </div>
+
+  <!-- 第六部分：快速开始 -->
+  <div class="section">
+    <h2><span class="icon">🏃</span>今天就能开始的最短路径</h2>
+    <p style="margin-bottom:16px">如果朋友问你"我从哪开始"，给ta这条最短路线：</p>
+    <ol class="steps">
+      <li>
+        打开 <a href="https://lovable.dev" target="_blank">lovable.dev</a>，注册账号
+      </li>
+      <li>
+        用一句话描述要做什么（参考上面的需求模板）
+      </li>
+      <li>
+        等30秒，看AI生成的效果
+      </li>
+      <li>
+        不满意就继续对话修改，满意就点Publish发布
+      </li>
+      <li>
+        把生成的网址发给朋友，搞定！
+      </li>
+    </ol>
+    <div class="tip tip-success" style="margin-top:16px">
+      <strong>整个过程零代码、零费用、零安装。</strong>从打开网址到发布上线，最快5分钟。
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>2026年9月整理 · AI工具更新很快，建议每季度看看有没有更好的新工具</p>
+    <p style="margin-top:4px">有问题随时问你的AI助手</p>
+  </div>
+
+</div>
+</body>
+</html>

@@ -339,7 +339,7 @@ body {
 }
 .approval-info .comment { color: var(--text); font-style: italic; }
 
-/* ===== 飞书评审模式 - 投票统计与列表 ===== */
+/* ===== 多人评审制 - 投票统计与列表 ===== */
 .vote-summary {
   display: flex;
   gap: 8px;
@@ -1132,6 +1132,8 @@ var DB = {
     ]).then(function(results) {
       self.data.members = (results[0].data || []).map(mapMember);
       self.data.requests = (results[1].data || []).map(mapRequest);
+      /* 首次加载也需校正旧数据状态 + 48小时到期检测 */
+      self.recalibrateStatuses(self.data.requests);
       state.serverConnected = true;
       if (state.currentUser && !self.getMember(state.currentUser)) {
         state.currentUser = null;
@@ -1235,17 +1237,29 @@ var DB = {
     });
   },
 
-  /* 自动校正旧数据状态：按多数决重新计算，与数据库同步 */
+  /* 自动校正：1.旧数据状态 2.48小时到期自动截止 */
   recalibrateStatuses: function(requests) {
     var toFix = [];
+    var now = Date.now();
+    var DEADLINE = 48 * 60 * 60 * 1000; /* 48小时 */
+
     requests.forEach(function(req) {
       var votes = req.votes || [];
       var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
       var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+      var deadline = req.createdAt + DEADLINE;
+      var isExpired = now > deadline;
+
+      /* 按多数决计算正确状态 */
       var correctStatus;
       if (approveCount > rejectCount) correctStatus = 'approved';
       else if (rejectCount > approveCount) correctStatus = 'rejected';
       else correctStatus = 'pending';
+
+      /* 48小时到期 + 仍待审批 → 强制截止，平票默认驳回 */
+      if (isExpired && correctStatus === 'pending' && votes.length > 0) {
+        correctStatus = 'rejected';
+      }
 
       if (req.status !== correctStatus) {
         req.status = correctStatus;
@@ -1254,12 +1268,19 @@ var DB = {
         } else if (!req.decidedAt) {
           req.decidedAt = Date.now();
         }
-        toFix.push({ id: req.id, status: correctStatus, decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()) });
+        toFix.push({
+          id: req.id,
+          status: correctStatus,
+          decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString())
+        });
       }
     });
+
     /* 批量更新到数据库 */
     toFix.forEach(function(fix) {
-      sb.from('requests').update({ status: fix.status, decided_at: fix.decidedAt }).eq('id', fix.id).then(function() {});
+      sb.from('requests').update({ status: fix.status, decided_at: fix.decidedAt }).eq('id', fix.id).then(function(result) {
+        if (result && result.error) console.log('校正失败:', result.error);
+      }).catch(function(e) { console.log('校正异常:', e); });
     });
   },
 
@@ -1464,6 +1485,13 @@ var DB = {
     var req = this.data.requests.find(function(r) { return r.id === requestId; });
     if (!req) return false;
     if (req.applicantId === user.id) { showToast('不能审批自己的申请', 'error'); return false; }
+
+    /* 48小时投票截止检查 */
+    var deadline = req.createdAt + 48 * 60 * 60 * 1000;
+    if (Date.now() > deadline) {
+      showToast('该申请投票已截止（超过48小时），无法再投票', 'error');
+      return false;
+    }
 
     var votes = req.votes || [];
     /* 检查是否已投过票（改票） */
@@ -2021,7 +2049,7 @@ function showApprovalModal(requestId, action) {
 
   var changeHint = myVote
     ? '<div style="font-size:12px;color:var(--warning);margin-bottom:8px;text-align:center">⚠️ 你已投过票（' + (myVote.decision === 'approved' ? '通过' : '驳回') + '），本次将修改你的投票</div>'
-    : '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;text-align:center">飞书评审模式：所有人都能投票，意见实时可见</div>';
+    : '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;text-align:center">多人评审制：通过人数>驳回人数才通过，48小时内未决自动驳回</div>';
 
   /* 预填已有意见 */
   var prefillComment = myVote && myVote.comment ? myVote.comment : '';
@@ -2468,7 +2496,7 @@ function renderApproval() {
 
   if (!user) return '<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-text">请先登录</div></div>';
 
-  /* 飞书评审模式：显示所有非自己发起的申请（不限状态，都可投票） */
+  /* 多人评审制：显示所有非自己发起的申请（不限状态，都可投票） */
   var allRequests = DB.data.requests;
   var votable = allRequests.filter(function(r) { return r.applicantId !== user.id; });
   var myOwn = allRequests.filter(function(r) { return r.applicantId === user.id; });
@@ -2684,7 +2712,7 @@ function renderSettings() {
     '<button class="btn btn-primary" data-action="open-add-member" style="margin-top:4px">➕ 添加成员</button>' +
     '<div class="section-title">💡 使用说明</div>' +
     '<div class="card" style="font-size:13px;color:var(--text-secondary);line-height:1.8">' +
-      '<div><strong style="color:var(--text)">飞书评审模式</strong>：所有人都能对申请投票，意见实时可见，通过人数大于驳回人数才通过，可改票</div>' +
+      '<div><strong style="color:var(--text)">多人评审制</strong>：所有人都能对申请投票，通过人数>驳回人数才通过，48小时内未决自动驳回，可改票</div>' +
       '<div><strong style="color:var(--text)">分享安利</strong>：已通过的申请可以复制文字分享到微信</div>' +
       '<div><strong style="color:var(--text)">收藏功能</strong>：在记录中点⭐收藏，个人收藏库在"我的"里查看</div>' +
       '<div><strong style="color:var(--text)">消费统计</strong>：首页显示自己的消费总额，管理员可看所有人的</div>' +
@@ -2693,7 +2721,7 @@ function renderSettings() {
     '<div class="section-title">⚙️ 数据管理</div>' +
     dataManagementHtml +
     accountHtml +
-    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.2 飞书评审+图片+备份版<br>数据云端持久，实时同步</div>';
+    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.3 多人评审+48小时截止+图片版<br>数据云端持久，实时同步</div>';
 }
 
 /* ===== 组件渲染 ===== */
@@ -2757,9 +2785,27 @@ function renderRequestCard(req, options) {
     voteListHtml += '</div>';
   }
 
+  /* 投票截止倒计时提示（待审批状态才显示） */
+  var deadlineHtml = '';
+  if (req.status === 'pending') {
+    var deadlineTime = req.createdAt + 48 * 60 * 60 * 1000;
+    var remaining = deadlineTime - Date.now();
+    if (remaining > 0) {
+      var hours = Math.floor(remaining / (60 * 60 * 1000));
+      var mins = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+      if (votes.length > 0) {
+        deadlineHtml = '<div style="font-size:12px;color:var(--warning);text-align:center;padding:6px 0;background:rgba(245,158,11,0.08);border-radius:6px;margin-bottom:8px">⏱️ 投票截止倒计时：剩余 ' + hours + '小时' + mins + '分（平票将自动驳回）</div>';
+      } else {
+        deadlineHtml = '<div style="font-size:12px;color:var(--text-tertiary);text-align:center;padding:6px 0;margin-bottom:8px">⏱️ 48小时内需完成投票</div>';
+      }
+    } else {
+      deadlineHtml = '<div style="font-size:12px;color:var(--danger);text-align:center;padding:6px 0;background:rgba(239,68,68,0.08);border-radius:6px;margin-bottom:8px">⏱️ 投票已截止，正在自动处理...</div>';
+    }
+  }
+
   if (options.showActions && user && req.applicantId !== user.id) {
-    /* 飞书评审模式：所有人都能投票，不限状态 */
-    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml +
+    /* 多人评审制：所有人都能投票，通过人数>驳回人数才通过 */
+    footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml +
       '<div class="action-row">' +
         '<button class="btn btn-success" data-action="open-approve" data-id="' + req.id + '">' +
           (hasVoted && myVote.decision === 'approved' ? '✅ 已通过（改票）' : '✅ 通过') +
@@ -2770,13 +2816,13 @@ function renderRequestCard(req, options) {
       '</div></div>';
   } else if (options.showActions && user && req.applicantId === user.id) {
     /* 申请者自己：只看不能投 */
-    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml +
+    footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml +
       '<div style="color:var(--text-tertiary);text-align:center;padding:8px 0">⏳ 等待朋友评审...</div></div>';
   } else {
     var favBtn = options.showFavorite && user
       ? '<button class="btn btn-ghost" data-action="toggle-favorite" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">' + (DB.isFavorited(req.id) ? '⭐ 已收藏' : '☆ 收藏') + '</button>'
       : '';
-    footer = '<div class="approval-info">' + voteSummaryHtml + voteListHtml + favBtn +
+    footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml + favBtn +
       (req.status === 'approved' ? '<button class="btn btn-ghost" data-action="share-request" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">📤 分享安利</button>' : '') +
     '</div>';
   }
