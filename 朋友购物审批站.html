@@ -868,6 +868,70 @@ body {
 @keyframes toastIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toastOut { to { opacity: 0; transform: translateY(-20px); } }
 
+/* ===== 图片上传 ===== */
+.img-upload-area {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  position: relative;
+}
+.img-upload-area:hover { border-color: var(--primary-light); background: rgba(124,58,237,0.05); }
+.img-upload-area.has-img { padding: 8px; }
+.img-upload-hint { font-size: 13px; color: var(--text-secondary); }
+.img-upload-icon { font-size: 28px; margin-bottom: 4px; }
+.img-preview-wrapper { position: relative; display: inline-block; }
+.img-preview { max-width: 100%; max-height: 200px; border-radius: var(--radius-sm); }
+.img-remove-btn {
+  position: absolute;
+  top: -8px; right: -8px;
+  width: 24px; height: 24px;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.img-uploading { font-size: 13px; color: var(--primary-light); }
+.img-uploading .spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 投票列表中的图片 */
+.vote-item .vote-img-thumb {
+  max-width: 120px;
+  max-height: 120px;
+  border-radius: 8px;
+  margin-top: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  transition: transform 0.2s;
+}
+.vote-item .vote-img-thumb:active { transform: scale(0.95); }
+
+/* 图片放大查看 */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.9);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: fadeIn 0.2s;
+}
+.img-lightbox img {
+  max-width: 95vw;
+  max-height: 90vh;
+  border-radius: 8px;
+}
+
 /* ===== Responsive ===== */
 @media (min-width: 481px) {
   body { background: #0a0a14; }
@@ -1206,7 +1270,8 @@ var DB = {
     }
     var newVote = {
       userId: user.id, userName: user.name, userAvatar: user.avatar,
-      decision: decision, comment: comment || '', votedAt: Date.now()
+      decision: decision, comment: comment || '', votedAt: Date.now(),
+      imageUrl: voteImageUrl || null
     };
     if (existingIdx >= 0) {
       votes[existingIdx] = newVote;
@@ -1374,6 +1439,116 @@ function handleLogout() {
   localStorage.removeItem('fsp-user-id');
   showToast('已退出登录', 'info');
   render();
+}
+
+/* ===== 图片上传处理 ===== */
+var voteImageFile = null;     /* 待上传的压缩后图片Blob */
+var voteImageUrl = null;      /* 已上传的图片URL（改票时已有的） */
+var voteImageRemoved = false; /* 改票时是否删除了旧图片 */
+
+/* 压缩图片：最大800px宽，JPEG 0.7质量，目标<500KB */
+function compressImage(file, callback) {
+  if (!file || !file.type.startsWith('image/')) {
+    showToast('请选择图片文件', 'error');
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas');
+      var maxDim = 800;
+      var w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = h * maxDim / w; w = maxDim; }
+        else { w = w * maxDim / h; h = maxDim; }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(function(blob) {
+        callback(blob);
+      }, 'image/jpeg', 0.7);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* 上传图片到Supabase Storage */
+function uploadVoteImage(blob, callback) {
+  var fileName = 'vote_' + Date.now() + '_' + Math.floor(Math.random() * 10000) + '.jpg';
+  sb.storage.from('vote-images').upload(fileName, blob, {
+    contentType: 'image/jpeg',
+    cacheControl: '3600'
+  }).then(function(result) {
+    if (result.error) {
+      showToast('图片上传失败: ' + result.error.message, 'error');
+      callback(null);
+    } else {
+      var url = sb.storage.from('vote-images').getPublicUrl(fileName).data.publicUrl;
+      callback(url);
+    }
+  }).catch(function(err) {
+    showToast('图片上传失败', 'error');
+    callback(null);
+  });
+}
+
+/* 处理图片选择 */
+function handleImageSelect(input) {
+  var file = input.files[0];
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    showToast('图片太大，请选小于10MB的图片', 'error');
+    return;
+  }
+  var area = document.getElementById('img-upload-area');
+  area.innerHTML = '<div class="img-uploading"><span class="spinner">⟳</span> 压缩中...</div>';
+  compressImage(file, function(blob) {
+    if (!blob) { resetImageUpload(); return; }
+    area.innerHTML = '<div class="img-uploading"><span class="spinner">⟳</span> 上传中...</div>';
+    uploadVoteImage(blob, function(url) {
+      if (!url) { resetImageUpload(); return; }
+      voteImageFile = null;
+      voteImageUrl = url;
+      voteImageRemoved = false;
+      area.innerHTML =
+        '<div class="img-preview-wrapper">' +
+          '<img src="' + url + '" class="img-preview" style="max-height:150px">' +
+          '<button class="img-remove-btn" data-action="remove-vote-image">✕</button>' +
+        '</div>';
+      area.classList.add('has-img');
+    });
+  });
+}
+
+/* 重置图片上传区域 */
+function resetImageUpload() {
+  voteImageFile = null;
+  voteImageUrl = null;
+  voteImageRemoved = true;
+  var area = document.getElementById('img-upload-area');
+  if (area) {
+    area.classList.remove('has-img');
+    area.innerHTML =
+      '<div class="img-upload-icon">📷</div>' +
+      '<div class="img-upload-hint">点击上传图片（选填）</div>' +
+      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-vote-image">';
+  }
+}
+
+/* 图片放大查看 */
+function showImageLightbox(url) {
+  var existing = document.getElementById('img-lightbox');
+  if (existing) existing.remove();
+  var lightbox = document.createElement('div');
+  lightbox.id = 'img-lightbox';
+  lightbox.className = 'img-lightbox';
+  lightbox.innerHTML = '<img src="' + url + '">';
+  lightbox.addEventListener('click', function() { lightbox.remove(); });
+  document.body.appendChild(lightbox);
 }
 
 function openChangePinModal() {
@@ -1574,6 +1749,7 @@ function showApprovalModal(requestId, action) {
               '<span class="vote-time">' + Utils.formatTime(v.votedAt) + '</span>' +
             '</div>' +
             (v.comment ? '<div class="vote-comment">"' + Utils.escapeHtml(v.comment) + '"</div>' : '<div class="vote-no-comment">未填写意见</div>') +
+            (v.imageUrl ? '<img src="' + v.imageUrl + '" class="vote-img-thumb" data-action="view-vote-image" data-url="' + v.imageUrl + '" alt="评审图片">' : '') +
           '</div>' +
         '</div>';
     });
@@ -1586,6 +1762,29 @@ function showApprovalModal(requestId, action) {
 
   /* 预填已有意见 */
   var prefillComment = myVote && myVote.comment ? myVote.comment : '';
+
+  /* 初始化图片状态：改票时预填已有图片 */
+  voteImageUrl = (myVote && myVote.imageUrl) ? myVote.imageUrl : null;
+  voteImageRemoved = false;
+
+  /* 图片上传区域HTML */
+  var imgUploadHtml;
+  if (voteImageUrl) {
+    imgUploadHtml =
+      '<div id="img-upload-area" class="img-upload-area has-img" data-action="select-vote-image">' +
+        '<div class="img-preview-wrapper">' +
+          '<img src="' + voteImageUrl + '" class="img-preview" style="max-height:150px">' +
+          '<button class="img-remove-btn" data-action="remove-vote-image">✕</button>' +
+        '</div>' +
+      '</div>';
+  } else {
+    imgUploadHtml =
+      '<div id="img-upload-area" class="img-upload-area" data-action="select-vote-image">' +
+        '<div class="img-upload-icon">📷</div>' +
+        '<div class="img-upload-hint">点击上传图片（选填）</div>' +
+        '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-vote-image">' +
+      '</div>';
+  }
 
   var overlay = document.getElementById('modal-overlay');
   overlay.innerHTML =
@@ -1613,6 +1812,10 @@ function showApprovalModal(requestId, action) {
         '<textarea class="form-textarea" id="modal-comment" placeholder="' +
           (isApprove ? '说点什么鼓励一下...' : '告诉TA为什么不能买...') + '">' + Utils.escapeHtml(prefillComment) + '</textarea>' +
       '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">附图（选填，最多1张）</label>' +
+        imgUploadHtml +
+      '</div>' +
       '<button class="btn ' + (isApprove ? 'btn-success' : 'btn-danger') + '" data-action="confirm-decision">' +
         (myVote ? '📝 修改投票' : (isApprove ? '确认通过' : '确认驳回')) +
       '</button>' +
@@ -1625,6 +1828,9 @@ function closeModal() {
   overlay.classList.remove('active');
   overlay.innerHTML = '';
   modalContext = null;
+  /* 清理图片状态 */
+  voteImageUrl = null;
+  voteImageRemoved = false;
 }
 
 function showQuickSwitchModal() {
@@ -1722,6 +1928,7 @@ function showShareModal(requestId) {
     votes.forEach(function(v) {
       shareText += v.userAvatar + ' ' + v.userName + '：' + (v.decision === 'approved' ? '✅' : '❌');
       if (v.comment) shareText += ' - "' + v.comment + '"';
+      if (v.imageUrl) shareText += ' [附图]';
       shareText += '\n';
     });
   } else {
@@ -2170,7 +2377,7 @@ function renderSettings() {
     '<div class="section-title">⚙️ 数据管理</div>' +
     dataManagementHtml +
     accountHtml +
-    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.0 飞书评审版<br>数据云端持久，实时同步</div>';
+    '<div style="text-align:center;padding:20px 0;color:var(--text-tertiary);font-size:12px">朋友购物审批站 v7.1 飞书评审+图片版<br>数据云端持久，实时同步</div>';
 }
 
 /* ===== 组件渲染 ===== */
@@ -2227,6 +2434,7 @@ function renderRequestCard(req, options) {
             (v.comment
               ? '<div class="vote-comment">"' + Utils.escapeHtml(v.comment) + '"</div>'
               : '<div class="vote-no-comment">未填写意见</div>') +
+            (v.imageUrl ? '<img src="' + v.imageUrl + '" class="vote-img-thumb" data-action="view-vote-image" data-url="' + v.imageUrl + '" alt="评审图片">' : '') +
           '</div>' +
         '</div>';
     });
@@ -2424,6 +2632,22 @@ document.addEventListener('click', function(e) {
     case 'confirm-decision':
       handleConfirmDecision();
       break;
+    case 'select-vote-image':
+      /* 点击上传区域或file input */
+      if (target.tagName === 'INPUT') {
+        if (target.files && target.files[0]) handleImageSelect(target);
+      } else {
+        var fileInput = target.querySelector('input[type="file"]');
+        if (fileInput) fileInput.click();
+      }
+      break;
+    case 'remove-vote-image':
+      e.stopPropagation();
+      resetImageUpload();
+      break;
+    case 'view-vote-image':
+      showImageLightbox(target.dataset.url);
+      break;
     case 'close-modal':
       closeModal();
       break;
@@ -2532,6 +2756,12 @@ document.getElementById('modal-overlay').addEventListener('click', function(e) {
 
 /* 成员名称编辑 - 失焦保存 */
 document.addEventListener('change', function(e) {
+  /* 图片选择 */
+  var imgInput = e.target.closest('input[type="file"][data-action="select-vote-image"]');
+  if (imgInput) {
+    if (imgInput.files && imgInput.files[0]) handleImageSelect(imgInput);
+    return;
+  }
   var target = e.target.closest('[data-action="edit-member-name"]');
   if (!target) return;
   var name = target.value.trim();
