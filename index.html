@@ -3062,6 +3062,9 @@ function handleConfirmAddMember() {
   var nameEl = document.getElementById('modal-member-name');
   var name = nameEl ? nameEl.value.trim() : '';
   if (!name) { showToast('请输入昵称', 'error'); return; }
+  if (DB.data.members.find(function(m) { return m.name === name; })) {
+    showToast('这个昵称已存在', 'error'); return;
+  }
   if (!state.modalRoles.isApplicant && !state.modalRoles.isApprover) {
     showToast('请至少选择一个角色', 'error'); return;
   }
@@ -3423,13 +3426,22 @@ document.addEventListener('change', function(e) {
   var target = e.target.closest('[data-action="edit-member-name"]');
   if (!target) return;
   var name = target.value.trim();
+  var memberId = target.dataset.id;
   if (!name) {
     showToast('名称不能为空', 'error');
-    var member = DB.getMember(target.dataset.id);
+    var member = DB.getMember(memberId);
     if (member) target.value = member.name;
     return;
   }
-  DB.updateMemberName(target.dataset.id, name);
+  /* 重名校验：排除自己 */
+  var duplicate = DB.data.members.find(function(m) { return m.name === name && m.id !== memberId; });
+  if (duplicate) {
+    showToast('这个昵称已存在', 'error');
+    var curMember = DB.getMember(memberId);
+    if (curMember) target.value = curMember.name;
+    return;
+  }
+  DB.updateMemberName(memberId, name);
   showToast('名称已更新', 'success');
 });
 
