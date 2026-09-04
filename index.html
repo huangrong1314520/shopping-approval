@@ -1306,6 +1306,22 @@ var DB = {
       return votes.some(function(v) { return v.userId === user.id && v.decision === 'rejected'; });
     });
   },
+  /* 他人通过我的申请 */
+  getApprovedByOthers: function() {
+    var user = this.getCurrentUser();
+    if (!user) return [];
+    return this.data.requests.filter(function(r) {
+      return r.applicantId === user.id && r.status === 'approved';
+    });
+  },
+  /* 他人驳回我的申请 */
+  getRejectedByOthers: function() {
+    var user = this.getCurrentUser();
+    if (!user) return [];
+    return this.data.requests.filter(function(r) {
+      return r.applicantId === user.id && r.status === 'rejected';
+    });
+  },
   getMyStats: function() {
     var user = this.getCurrentUser();
     if (!user) return { applied: 0, approved: 0, rejected: 0, approvedRate: 0, myTotalSpent: 0 };
@@ -1435,13 +1451,13 @@ var DB = {
       votes.push(newVote);
     }
 
-    /* 计算最终状态：一人通过即为已通过（会签模式），全部驳回才驳回 */
+    /* 计算最终状态：通过人数 > 驳回人数 才通过，反之驳回，相等则继续待定 */
     var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
     var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
     var newStatus;
-    if (approveCount > 0) {
+    if (approveCount > rejectCount) {
       newStatus = 'approved';
-    } else if (rejectCount >= 2) {
+    } else if (rejectCount > approveCount) {
       newStatus = 'rejected';
     } else {
       newStatus = 'pending';
@@ -2321,6 +2337,8 @@ function renderHome() {
   /* 个人统计：与"我的"页面一致 */
   var myStats = user ? DB.getMyStats() : { applied: 0, approved: 0, rejected: 0, myTotalSpent: 0 };
   var myPendingReview = user ? votablePending || 0 : 0;
+  var approvedByOthers = user ? DB.getApprovedByOthers().length : 0;
+  var rejectedByOthers = user ? DB.getRejectedByOthers().length : 0;
 
   return '' +
     '<div class="greeting">' +
@@ -2336,9 +2354,11 @@ function renderHome() {
     '</div>' +
     '<div class="stats-grid">' +
       '<div class="stat-card" style="cursor:pointer" data-action="navigate" data-view="approve"><div class="stat-icon">⏳</div><div class="stat-value">' + myPendingReview + '</div><div class="stat-label">待我审批</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过的</div></div>' +
-      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回的</div></div>' +
       '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="spent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过他人</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回他人</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="approved-by-others"><div class="stat-icon">🎉</div><div class="stat-value">' + approvedByOthers + '</div><div class="stat-label">他人通过我</div></div>' +
+      '<div class="stat-card" style="cursor:pointer" data-action="navigate-mine" data-filter="rejected-by-others"><div class="stat-icon">💔</div><div class="stat-value">' + rejectedByOthers + '</div><div class="stat-label">他人驳回我</div></div>' +
     '</div>' +
     (quickActions ? '<div class="quick-action">' + quickActions + '</div>' : '') +
     '<div class="section-title">📋 最近动态</div>' +
@@ -2458,6 +2478,8 @@ function renderMine() {
   var myApprovals = DB.getMyApprovals();
   var myRejections = DB.getMyRejections();
   var myFavorites = DB.getMyFavorites();
+  var approvedByOthers = DB.getApprovedByOthers();
+  var rejectedByOthers = DB.getRejectedByOthers();
   var isAdmin = DB.isCurrentUserAdmin();
   var filter = state.mineFilter || 'all';
 
@@ -2470,8 +2492,10 @@ function renderMine() {
   var cardActive = 'border:2px solid var(--primary);background:var(--primary-bg)';
   html += '<div class="stats-grid">' +
     '<div class="stat-card" data-action="set-mine-filter" data-filter="applied" style="cursor:pointer;' + (filter === 'applied' || filter === 'all' ? cardActive : '') + '"><div class="stat-icon">📝</div><div class="stat-value">' + myStats.applied + '</div><div class="stat-label">我申请的</div></div>' +
-    '<div class="stat-card" data-action="set-mine-filter" data-filter="approved" style="cursor:pointer;' + (filter === 'approved' ? cardActive : '') + '"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过的</div></div>' +
-    '<div class="stat-card" data-action="set-mine-filter" data-filter="rejected" style="cursor:pointer;' + (filter === 'rejected' ? cardActive : '') + '"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回的</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="approved" style="cursor:pointer;' + (filter === 'approved' ? cardActive : '') + '"><div class="stat-icon">✅</div><div class="stat-value">' + myStats.approved + '</div><div class="stat-label">我通过他人</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="rejected" style="cursor:pointer;' + (filter === 'rejected' ? cardActive : '') + '"><div class="stat-icon">❌</div><div class="stat-value">' + myStats.rejected + '</div><div class="stat-label">我驳回他人</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="approved-by-others" style="cursor:pointer;' + (filter === 'approved-by-others' ? cardActive : '') + '"><div class="stat-icon">🎉</div><div class="stat-value">' + approvedByOthers.length + '</div><div class="stat-label">他人通过我</div></div>' +
+    '<div class="stat-card" data-action="set-mine-filter" data-filter="rejected-by-others" style="cursor:pointer;' + (filter === 'rejected-by-others' ? cardActive : '') + '"><div class="stat-icon">💔</div><div class="stat-value">' + rejectedByOthers.length + '</div><div class="stat-label">他人驳回我</div></div>' +
     '<div class="stat-card" data-action="set-mine-filter" data-filter="spent" style="cursor:pointer;' + (filter === 'spent' ? cardActive : '') + '"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:18px">' + Utils.formatPrice(myStats.myTotalSpent) + '</div><div class="stat-label">我的消费</div></div>' +
     '<div class="stat-card" data-action="set-mine-filter" data-filter="favorites" style="cursor:pointer;' + (filter === 'favorites' ? cardActive : '') + '"><div class="stat-icon">⭐</div><div class="stat-value">' + myFavorites.length + '</div><div class="stat-label">我的收藏</div></div>' +
   '</div>';
@@ -2483,15 +2507,25 @@ function renderMine() {
       ? myRequests.map(function(r) { return renderRequestCard(r, { compact: true, showDelete: isAdmin, showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有发起过申请</div></div></div>';
 
-    html += '<div class="section-title">✅ 我审批通过的</div>';
+    html += '<div class="section-title">✅ 我通过他人的</div>';
     html += myApprovals.length > 0
       ? myApprovals.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有通过过别人的申请</div></div></div>';
 
-    html += '<div class="section-title">❌ 我驳回的</div>';
+    html += '<div class="section-title">❌ 我驳回他人的</div>';
     html += myRejections.length > 0
       ? myRejections.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有驳回过别人的申请</div></div></div>';
+
+    html += '<div class="section-title">🎉 他人通过我的</div>';
+    html += approvedByOthers.length > 0
+      ? approvedByOthers.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有申请被他人通过</div></div></div>';
+
+    html += '<div class="section-title">💔 他人驳回我的</div>';
+    html += rejectedByOthers.length > 0
+      ? rejectedByOthers.map(function(r) { return renderRequestCard(r, { compact: true, showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有申请被他人驳回</div></div></div>';
 
     html += '<div class="section-title">⭐ 我的收藏</div>';
     html += myFavorites.length > 0
@@ -2503,15 +2537,25 @@ function renderMine() {
       ? myRequests.map(function(r) { return renderRequestCard(r, { showDelete: isAdmin, showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有发起过申请</div></div></div>';
   } else if (filter === 'approved') {
-    html += '<div class="section-title">✅ 我审批通过的（共' + myApprovals.length + '条）</div>';
+    html += '<div class="section-title">✅ 我通过他人的（共' + myApprovals.length + '条）</div>';
     html += myApprovals.length > 0
       ? myApprovals.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有通过过别人的申请</div></div></div>';
   } else if (filter === 'rejected') {
-    html += '<div class="section-title">❌ 我驳回的（共' + myRejections.length + '条）</div>';
+    html += '<div class="section-title">❌ 我驳回他人的（共' + myRejections.length + '条）</div>';
     html += myRejections.length > 0
       ? myRejections.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
       : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有驳回过别人的申请</div></div></div>';
+  } else if (filter === 'approved-by-others') {
+    html += '<div class="section-title">🎉 他人通过我的（共' + approvedByOthers.length + '条）</div>';
+    html += approvedByOthers.length > 0
+      ? approvedByOthers.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有申请被他人通过</div></div></div>';
+  } else if (filter === 'rejected-by-others') {
+    html += '<div class="section-title">💔 他人驳回我的（共' + rejectedByOthers.length + '条）</div>';
+    html += rejectedByOthers.length > 0
+      ? rejectedByOthers.map(function(r) { return renderRequestCard(r, { showFavorite: true }); }).join('')
+      : '<div class="card"><div class="empty-state" style="padding:16px"><div class="empty-text">还没有申请被他人驳回</div></div></div>';
   } else if (filter === 'spent') {
     var myApprovedApps = DB.data.requests.filter(function(r) { return r.applicantId === user.id && r.status === 'approved'; });
     html += '<div class="section-title">💰 我的消费明细（共' + myApprovedApps.length + '条，总计' + Utils.formatPrice(myStats.myTotalSpent) + '）</div>';
@@ -2596,7 +2640,7 @@ function renderSettings() {
     '<button class="btn btn-primary" data-action="open-add-member" style="margin-top:4px">➕ 添加成员</button>' +
     '<div class="section-title">💡 使用说明</div>' +
     '<div class="card" style="font-size:13px;color:var(--text-secondary);line-height:1.8">' +
-      '<div><strong style="color:var(--text)">飞书评审模式</strong>：所有人都能对申请投票，意见实时可见，一人通过即生效，可改票</div>' +
+      '<div><strong style="color:var(--text)">飞书评审模式</strong>：所有人都能对申请投票，意见实时可见，通过人数大于驳回人数才通过，可改票</div>' +
       '<div><strong style="color:var(--text)">分享安利</strong>：已通过的申请可以复制文字分享到微信</div>' +
       '<div><strong style="color:var(--text)">收藏功能</strong>：在记录中点⭐收藏，个人收藏库在"我的"里查看</div>' +
       '<div><strong style="color:var(--text)">消费统计</strong>：首页显示自己的消费总额，管理员可看所有人的</div>' +
@@ -2815,13 +2859,27 @@ function handleConfirmDecision() {
   if (success) {
     var req2 = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
     var actionLabel = modalContext.action === 'approved' ? '通过' : '驳回';
-    var msg = wasChanging
-      ? '已修改你的投票为「' + actionLabel + '」 📝'
-      : '已提交投票：' + actionLabel + ' 🗳️';
-    if (req2 && req2.status === 'approved' && modalContext.action === 'approved' && !wasChanging) {
-      msg = '已通过 ' + (req2 ? req2.applicantName : '') + ' 的申请 🎉';
+    var votes = (req2 && req2.votes) || [];
+    var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
+    var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
+
+    var msg;
+    if (wasChanging) {
+      msg = '已修改你的投票为「' + actionLabel + '」 📝';
+    } else {
+      msg = '已提交投票：' + actionLabel + ' 🗳️';
     }
-    showToast(msg, modalContext.action === 'approved' ? 'success' : 'info');
+
+    /* 根据最新投票结果给出提示 */
+    if (req2 && req2.status === 'approved') {
+      msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已通过 🎉';
+    } else if (req2 && req2.status === 'rejected') {
+      msg = '投票结果：' + approveCount + '通过 ' + rejectCount + '驳回，申请已驳回';
+    } else if (req2 && req2.status === 'pending') {
+      msg += '\n当前 ' + approveCount + '通过 ' + rejectCount + '驳回，平票中，等待更多人投票';
+    }
+
+    showToast(msg, req2 && req2.status === 'approved' ? 'success' : 'info');
     closeModal();
     render();
   } else {
