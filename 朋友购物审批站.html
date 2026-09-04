@@ -1748,14 +1748,14 @@ function handleRegister() {
 }
 
 function handleLogin() {
-  var memberId = document.getElementById('login-name').value;
+  var name = document.getElementById('login-name').value.trim();
   var pin = document.getElementById('login-pin').value.trim();
 
-  if (!memberId) { showToast('请选择身份', 'error'); return; }
+  if (!name) { showToast('请输入昵称', 'error'); return; }
   if (!pin) { showToast('请输入PIN码', 'error'); return; }
 
-  var member = DB.getMember(memberId);
-  if (!member) { showToast('用户不存在', 'error'); return; }
+  var member = DB.data.members.find(function(m) { return m.name === name; });
+  if (!member) { showToast('昵称不存在', 'error'); return; }
   if (member.pin !== pin) { showToast('PIN码错误', 'error'); return; }
 
   state.currentUser = member.id;
@@ -1996,24 +1996,18 @@ function renderLoginScreen() {
 
   var members = DB.getMembers();
 
-  /* --- 登录表单 --- */
-  var userOptions = members.map(function(m) {
-    return '<option value="' + Utils.escapeHtml(m.id) + '">' + m.avatar + ' ' + Utils.escapeHtml(m.name) + (m.isAdmin ? '（管理员）' : '') + '</option>';
-  }).join('');
-
+  /* --- 登录表单：输入昵称+PIN，不暴露成员列表 --- */
   var loginHtml =
     '<div class="form-group">' +
-      '<label class="form-label">选择身份</label>' +
-      '<select class="form-input" id="login-name">' +
-        '<option value="">-- 请选择 --</option>' +
-        userOptions +
-      '</select>' +
+      '<label class="form-label">昵称</label>' +
+      '<input type="text" class="form-input" id="login-name" placeholder="输入你的昵称" autocomplete="off">' +
     '</div>' +
     '<div class="form-group">' +
       '<label class="form-label">PIN码</label>' +
       '<input type="password" class="form-input" id="login-pin" placeholder="4位数字" maxlength="4" inputmode="numeric">' +
     '</div>' +
-    '<button class="btn btn-primary" data-action="do-login">🔐 登录</button>';
+    '<button class="btn btn-primary" data-action="do-login">🔐 登录</button>' +
+    '<div style="text-align:center;margin-top:12px;font-size:12px;color:var(--text-tertiary)">忘记昵称？问管理员或注册时的朋友</div>';
 
   /* --- 注册表单 --- */
   var emojiHtml = AVATAR_EMOJIS.slice(0, 32).map(function(e) {
@@ -3445,6 +3439,8 @@ document.addEventListener('keydown', function(e) {
     var target = e.target.closest('[data-action="edit-member-name"]');
     if (target) { target.blur(); return; }
     /* 登录/注册回车提交 */
+    var loginName = e.target.closest('#login-name');
+    if (loginName) { document.getElementById('login-pin').focus(); return; }
     var loginPin = e.target.closest('#login-pin');
     if (loginPin) { handleLogin(); return; }
     var regPinConfirm = e.target.closest('#reg-pin-confirm');
