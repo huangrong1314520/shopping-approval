@@ -2213,36 +2213,6 @@ function closeModal() {
   voteImageRemoved = false;
 }
 
-function showQuickSwitchModal() {
-  var members = DB.getMembers();
-  var listHtml = members.map(function(m) {
-    var roles = [];
-    if (m.isAdmin) roles.unshift('管理员');
-    if (m.isApplicant) roles.push('申请人');
-    if (m.isApprover) roles.push('审批人');
-    return '<div class="quick-switch-item ' + (state.currentUser === m.id ? 'active' : '') + '" data-action="quick-select-user" data-id="' + m.id + '">' +
-      '<span class="qs-avatar">' + m.avatar + '</span>' +
-      '<div class="qs-info">' +
-        '<div class="qs-name">' + Utils.escapeHtml(m.name) + '</div>' +
-        '<div class="qs-roles">' + (roles.join(' · ') || '无角色') + '</div>' +
-      '</div>' +
-      '<span class="qs-check">✓</span>' +
-    '</div>';
-  }).join('');
-
-  var overlay = document.getElementById('modal-overlay');
-  overlay.innerHTML =
-    '<div class="modal-sheet">' +
-      '<div class="modal-header">' +
-        '<h3>👤 切换身份</h3>' +
-        '<button class="modal-close" data-action="close-modal">✕</button>' +
-      '</div>' +
-      '<div class="quick-switch-list">' + listHtml + '</div>' +
-      '<button class="btn btn-ghost" data-action="navigate-settings" style="margin-top:12px">⚙️ 前往设置管理成员</button>' +
-    '</div>';
-  overlay.classList.add('active');
-}
-
 function showAddMemberModal() {
   state.modalSelectedEmoji = AVATAR_EMOJIS[Math.floor(Math.random() * AVATAR_EMOJIS.length)];
   state.modalRoles = { isApplicant: true, isApprover: true };
@@ -2278,6 +2248,9 @@ function showAddMemberModal() {
             '<div class="toggle-switch on role-approver" data-action="toggle-modal-role" data-role="isApprover"><div class="toggle-thumb"></div></div>' +
           '</div>' +
         '</div>' +
+      '</div>' +
+      '<div class="tip-box" style="margin-bottom:12px;font-size:12px;color:var(--text-secondary);background:var(--bg-input);padding:10px;border-radius:var(--radius-sm);line-height:1.5">' +
+        '💡 默认PIN码为 <strong>0000</strong>，请告知对方登录后及时修改密码' +
       '</div>' +
       '<button class="btn btn-primary" data-action="confirm-add-member">添加成员</button>' +
     '</div>';
@@ -3075,6 +3048,8 @@ function handleConfirmAddMember() {
 }
 
 function handleRemoveMember(id) {
+  var currentUser = DB.getCurrentUser();
+  if (!currentUser || !currentUser.isAdmin) { showToast('只有管理员可以删除成员', 'error'); return; }
   var member = DB.getMember(id);
   if (member && member.isAdmin) { showToast('管理员不可删除', 'error'); return; }
   if (DB.getMembers().length <= 1) { showToast('至少保留一个成员', 'error'); return; }
@@ -3384,18 +3359,6 @@ document.addEventListener('click', function(e) {
       break;
     case 'confirm-change-pin':
       handleChangePin();
-      break;
-    case 'quick-select-user':
-      state.currentUser = target.dataset.id;
-      localStorage.setItem('fsp-user-id', target.dataset.id);
-      closeModal();
-      var swUser = DB.getMember(target.dataset.id);
-      if (swUser) {
-        NotificationSystem.requestPermission();
-        NotificationSystem.updateTabTitle(DB.data.requests, swUser);
-        showToast('已切换到 ' + swUser.name, 'success');
-      }
-      render();
       break;
     case 'set-mine-filter':
       state.mineFilter = target.dataset.filter;
