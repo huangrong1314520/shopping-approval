@@ -991,7 +991,7 @@ var state = {
   view: 'home',
   currentUser: null,
   historyFilter: 'all',
-  approvalFilter: 'pending',
+  approvalFilter: 'unvoted',
   selectedEmoji: '🐱',
   newMemberRole: { isApplicant: true, isApprover: false },
   modalSelectedEmoji: '🐱',
@@ -1266,8 +1266,8 @@ var DB = {
       else if (rejectCount > approveCount) correctStatus = 'rejected';
       else correctStatus = 'pending';
 
-      /* 48小时到期 + 仍待审批 → 强制截止，平票默认驳回 */
-      if (isExpired && correctStatus === 'pending' && votes.length > 0) {
+      /* 48小时到期 + 仍待审批 → 强制截止，默认驳回（含0票情况） */
+      if (isExpired && correctStatus === 'pending') {
         correctStatus = 'rejected';
       }
 
@@ -1279,13 +1279,18 @@ var DB = {
           req.approverName = null;
           req.approverAvatar = null;
           req.comment = null;
-        } else if (!req.decidedAt) {
-          req.decidedAt = Date.now();
+        } else {
+          /* 如果是到期自动驳回，decidedAt 用截止时间而不是当前时间 */
+          if (isExpired && correctStatus === 'rejected') {
+            req.decidedAt = deadline;
+          } else if (!req.decidedAt) {
+            req.decidedAt = Date.now();
+          }
         }
         toFix.push({
           id: req.id,
           status: correctStatus,
-          decidedAt: correctStatus === 'pending' ? null : (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()),
+          decidedAt: correctStatus === 'pending' ? null : new Date(req.decidedAt).toISOString(),
           clearApprover: correctStatus === 'pending'
         });
       }
@@ -1504,6 +1509,7 @@ var DB = {
   voteRequest: function(requestId, decision, comment) {
     var user = this.getCurrentUser();
     if (!user) return false;
+    if (!user.isApprover) { showToast('你不是审批人，无法投票', 'error'); return false; }
     var req = this.data.requests.find(function(r) { return r.id === requestId; });
     if (!req) return false;
     if (req.applicantId === user.id) { showToast('不能审批自己的申请', 'error'); return false; }
@@ -1589,7 +1595,7 @@ var DB = {
     var id = 'm' + Date.now();
     sb.from('members').insert({
       id: id, name: name, avatar: avatar || '🐱',
-      is_applicant: true, is_approver: true, is_admin: false, pin: '0000'
+      is_applicant: !!isApplicant, is_approver: !!isApprover, is_admin: false, pin: '0000'
     }).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
     });
@@ -1600,6 +1606,54 @@ var DB = {
     var member = this.getMember(id);
     if (member && member.isAdmin) return;
     if (this.data.members.length <= 1) return;
+
+    var self = this;
+    /* 从所有申请中移除该成员的投票，并重新计算状态 */
+    var statusUpdates = [];
+    self.data.requests.forEach(function(req) {
+      var votes = req.votes || [];
+      var newVotes = votes.filter(function(v) { return v.userId !== id; });
+      if (newVotes.length !== votes.length) {
+        /* 重新计算状态 */
+        var approveCount = newVotes.filter(function(v) { return v.decision === 'approved'; }).length;
+        var rejectCount = newVotes.filter(function(v) { return v.decision === 'rejected'; }).length;
+        var newStatus;
+        if (approveCount > rejectCount) newStatus = 'approved';
+        else if (rejectCount > approveCount) newStatus = 'rejected';
+        else newStatus = 'pending';
+
+        req.votes = newVotes;
+        req.status = newStatus;
+        if (newStatus === 'pending') {
+          req.decidedAt = null;
+          req.approverId = null;
+          req.approverName = null;
+          req.approverAvatar = null;
+          req.comment = null;
+        }
+        statusUpdates.push({
+          id: req.id,
+          votes: newVotes,
+          status: newStatus,
+          decided_at: newStatus !== 'pending' ? (req.decidedAt ? new Date(req.decidedAt).toISOString() : new Date().toISOString()) : null,
+          approver_id: newStatus !== 'pending' ? req.approverId : null,
+          approver_name: newStatus !== 'pending' ? req.approverName : null,
+          approver_avatar: newStatus !== 'pending' ? req.approverAvatar : null,
+          comment: newStatus !== 'pending' ? req.comment : null
+        });
+      }
+    });
+
+    /* 批量更新申请状态 */
+    statusUpdates.forEach(function(u) {
+      sb.from('requests').update({
+        votes: u.votes, status: u.status, decided_at: u.decided_at,
+        approver_id: u.approver_id, approver_name: u.approver_name,
+        approver_avatar: u.approver_avatar, comment: u.comment
+      }).eq('id', u.id).catch(function(e) { console.log('更新投票失败:', e); });
+    });
+
+    /* 删除成员 */
     sb.from('members').delete().eq('id', id).then(function(result) {
       if (result.error) showToast(result.error.message, 'error');
     });
@@ -2346,9 +2400,9 @@ function renderHeader() {
 function renderTabBar() {
   var user = DB.getCurrentUser();
   var pendingCount = DB.getPendingRequests().length;
-  /* Tab红点：只算我还没投票的 */
+  /* Tab红点：只算我还没投票的（且我是审批人） */
   var votableCount = 0;
-  if (user) {
+  if (user && user.isApprover) {
     votableCount = DB.getPendingRequests().filter(function(r) {
       if (r.applicantId === user.id) return false;
       var votes = r.votes || [];
@@ -2377,21 +2431,27 @@ function renderHome() {
 
   var greetingSub = '去设置里选择你的身份吧';
   if (user) {
-    /* 待我投票：别人发起的 + 待审批 + 我还没投过票 */
-    var pendingForMe = DB.getPendingRequests().filter(function(r) {
-      if (r.applicantId === user.id) return false;
-      var votes = r.votes || [];
-      return !votes.some(function(v) { return v.userId === user.id; });
-    }).length;
-    if (pendingForMe > 0) {
-      greetingSub = '你有 ' + pendingForMe + ' 个申请待投票 📬';
+    if (user.isApprover) {
+      /* 待我投票：别人发起的 + 待审批 + 我还没投过票 */
+      var pendingForMe = DB.getPendingRequests().filter(function(r) {
+        if (r.applicantId === user.id) return false;
+        var votes = r.votes || [];
+        return !votes.some(function(v) { return v.userId === user.id; });
+      }).length;
+      if (pendingForMe > 0) {
+        greetingSub = '你有 ' + pendingForMe + ' 个申请待投票 📬';
+      } else {
+        greetingSub = '可以发起申请，也可以审批朋友的申请 🔄';
+      }
+    } else if (user.isApplicant) {
+      greetingSub = '可以发起购物申请，等待朋友审批 📝';
     } else {
-      greetingSub = '可以发起申请，也可以审批朋友的申请 🔄';
+      greetingSub = '去设置里开启申请或审批权限吧';
     }
   }
 
   var quickActions = '';
-  if (user) {
+  if (user && user.isApplicant) {
     quickActions += '<button class="btn btn-primary" data-action="navigate" data-view="submit">📝 发起购物申请</button>';
   }
 
@@ -2450,9 +2510,9 @@ function renderHome() {
   var rejectedByOthers = user ? DB.getRejectedByOthers().length : 0;
   var myFavCount = user ? DB.getMyFavorites().length : 0;
 
-  /* 待我投票醒目卡片 */
+  /* 待我投票醒目卡片（仅审批人显示） */
   var pendingCard = '';
-  if (user && myPendingReview > 0) {
+  if (user && user.isApprover && myPendingReview > 0) {
     pendingCard = '<div class="card" style="cursor:pointer;border:2px solid var(--warning);margin-bottom:12px;padding:16px" data-action="navigate-approval-unvoted">' +
       '<div style="display:flex;align-items:center;gap:12px">' +
         '<div style="font-size:32px">⏳</div>' +
@@ -2590,7 +2650,9 @@ function renderApproval() {
   var html = filterTabsHtml;
 
   var hintText = '';
-  if (filter === 'unvoted') {
+  if (!user.isApprover) {
+    hintText = '📌 你当前不是审批人，仅可查看，无法投票';
+  } else if (filter === 'unvoted') {
     hintText = '📌 你还没投票的申请：通过人数>驳回人数才通过，48小时内未决自动驳回';
   } else if (filter === 'voted') {
     hintText = '📌 你已参与投票的申请，仍可改票改变结果';
@@ -2899,8 +2961,8 @@ function renderRequestCard(req, options) {
     }
   }
 
-  if (options.showActions && user && req.applicantId !== user.id) {
-    /* 多人评审制：所有人都能投票，通过人数>驳回人数才通过 */
+  if (options.showActions && user && req.applicantId !== user.id && user.isApprover) {
+    /* 多人评审制：审批人可投票，通过人数>驳回人数才通过 */
     footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml +
       '<div class="action-row">' +
         '<button class="btn btn-success" data-action="open-approve" data-id="' + req.id + '">' +
