@@ -2449,7 +2449,7 @@ function renderApproval() {
   var html = '';
   if (votable.length > 0) {
     html += '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' +
-      '📌 飞书评审模式：所有人都能投票，意见实时可见，一人通过即生效' +
+      '📌 多数决评审：所有人都能投票，通过人数大于驳回人数才通过，可改票' +
     '</div>';
     html += votable.map(function(r) { return renderRequestCard(r, { showActions: true }); }).join('');
   }
