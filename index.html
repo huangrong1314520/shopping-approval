@@ -3359,6 +3359,10 @@ function renderRequestCard(req, options) {
     }
   }
 
+  var shareBtn = req.status === 'approved'
+    ? '<button class="btn btn-ghost" data-action="share-request" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">📤 分享安利</button>'
+    : '';
+
   if (options.showActions && user && req.applicantId !== user.id && user.isApprover) {
     /* 多人评审制：审批人可投票，通过人数>驳回人数才通过 */
     footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml +
@@ -3369,17 +3373,17 @@ function renderRequestCard(req, options) {
         '<button class="btn btn-danger" data-action="open-reject" data-id="' + req.id + '">' +
           (hasVoted && myVote.decision === 'rejected' ? '❌ 已驳回（改票）' : '❌ 驳回') +
         '</button>' +
-      '</div></div>';
+      '</div>' + shareBtn + '</div>';
   } else if (options.showActions && user && req.applicantId === user.id) {
     /* 申请者自己：只看不能投 */
     footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml +
-      '<div style="color:var(--text-tertiary);text-align:center;padding:8px 0">⏳ 等待朋友评审...</div></div>';
+      '<div style="color:var(--text-tertiary);text-align:center;padding:8px 0">⏳ 等待朋友评审...</div>' +
+      shareBtn + '</div>';
   } else {
     var favBtn = options.showFavorite && user
       ? '<button class="btn btn-ghost" data-action="toggle-favorite" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">' + (DB.isFavorited(req.id) ? '⭐ 已收藏' : '☆ 收藏') + '</button>'
       : '';
-    footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml + favBtn +
-      (req.status === 'approved' ? '<button class="btn btn-ghost" data-action="share-request" data-id="' + req.id + '" style="margin-top:8px;width:100%;font-size:13px">📤 分享安利</button>' : '') +
+    footer = '<div class="approval-info">' + voteSummaryHtml + deadlineHtml + voteListHtml + favBtn + shareBtn +
     '</div>';
   }
 
