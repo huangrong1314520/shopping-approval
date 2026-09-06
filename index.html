@@ -1627,7 +1627,7 @@ var DB = {
   },
 
   /* 投票：乐观锁 + 冲突重试，返回 Promise<{success, status, votes}> */
-  voteRequest: function(requestId, decision, comment) {
+  voteRequest: function(requestId, decision, comment, savedImageUrl) {
     var self = this;
     var user = this.getCurrentUser();
     if (!user) return Promise.resolve({ success: false });
@@ -1658,7 +1658,7 @@ var DB = {
       var newVote = {
         userId: user.id, userName: user.name, userAvatar: user.avatar,
         decision: decision, comment: comment || '', votedAt: Date.now(),
-        imageUrl: voteImageUrl || null
+        imageUrl: savedImageUrl || voteImageUrl || null
       };
       if (existingIdx >= 0) {
         votes[existingIdx] = newVote;
@@ -2585,6 +2585,23 @@ function closeModal() {
   voteImageRemoved = false;
 }
 
+/* 兼容性复制文本 */
+function fallbackCopyText(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast('链接已复制，打开淘宝App即可打开', 'success');
+  } catch(e) {
+    showToast('复制失败，请手动选中复制', 'error');
+  }
+  document.body.removeChild(ta);
+}
+
 function showAddMemberModal() {
   state.modalSelectedEmoji = AVATAR_EMOJIS[Math.floor(Math.random() * AVATAR_EMOJIS.length)];
   state.modalRoles = { isApplicant: true, isApprover: true };
@@ -2925,7 +2942,7 @@ function renderSubmit() {
       '</div>' +
       '<div class="form-group">' +
         '<label class="form-label">链接（选填）</label>' +
-        '<input type="url" class="form-input" id="form-link" placeholder="https://...">' +
+        '<input type="text" class="form-input" id="form-link" placeholder="粘贴淘宝/京东等商品链接">' +
       '</div>' +
       '<div class="form-group">' +
         '<label class="form-label">物品图片（选填）</label>' +
@@ -3348,7 +3365,16 @@ function renderRequestCard(req, options) {
     '</div>';
   }
 
-  var linkHtml = req.link ? '<a href="' + Utils.escapeHtml(req.link) + '" target="_blank" class="request-link">🔗 查看链接</a>' : '';
+  var linkHtml = '';
+  if (req.link) {
+    if (/^https?:\/\//i.test(req.link)) {
+      /* 标准 http(s) 链接，可点击打开 */
+      linkHtml = '<a href="' + Utils.escapeHtml(req.link) + '" target="_blank" rel="noopener" class="request-link">🔗 查看链接</a>';
+    } else {
+      /* 非标准链接（如淘宝淘口令），显示为可复制文本 */
+      linkHtml = '<div class="request-link" style="cursor:pointer" data-action="copy-link" data-link="' + Utils.escapeHtml(req.link) + '">🔗 复制链接（淘宝口令请复制到淘宝App打开）</div>';
+    }
+  }
   var reqImageHtml = req.imageUrl ? '<img src="' + req.imageUrl + '" class="request-image" data-action="view-vote-image" data-url="' + req.imageUrl + '" alt="物品图片" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:pointer">' : '';
   var compactStyle = options.compact ? ' style="padding:12px"' : '';
 
@@ -3489,16 +3515,19 @@ function handleDeleteRequest(requestId) {
 function handleConfirmDecision() {
   if (!modalContext) return;
   var comment = document.getElementById('modal-comment').value.trim();
-  var req = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
+  var requestId = modalContext.requestId;
+  var action = modalContext.action;
+  var savedVoteImageUrl = voteImageUrl;
+  var req = DB.data.requests.find(function(r) { return r.id === requestId; });
   var wasChanging = req && req.votes && req.votes.some(function(v) { return v.userId === (DB.getCurrentUser() || {}).id; });
-  var actionLabel = modalContext.action === 'approved' ? '通过' : '驳回';
+  var actionLabel = action === 'approved' ? '通过' : '驳回';
 
-  /* 先关弹窗，保持响应感（本地已乐观更新） */
+  /* 先关弹窗，保持响应感 */
   closeModal();
 
-  DB.voteRequest(modalContext.requestId, modalContext.action, comment).then(function(result) {
+  DB.voteRequest(requestId, action, comment, savedVoteImageUrl).then(function(result) {
     if (result && result.success) {
-      var req2 = DB.data.requests.find(function(r) { return r.id === modalContext.requestId; });
+      var req2 = DB.data.requests.find(function(r) { return r.id === requestId; });
       var votes = result.votes || (req2 && req2.votes) || [];
       var approveCount = votes.filter(function(v) { return v.decision === 'approved'; }).length;
       var rejectCount = votes.filter(function(v) { return v.decision === 'rejected'; }).length;
@@ -3523,6 +3552,8 @@ function handleConfirmDecision() {
     }
     /* 失败的情况 voteRequest 里已经弹过 toast 了 */
     render();
+  }).catch(function() {
+    showToast('投票异常，请重试', 'error');
   });
 }
 
@@ -3660,6 +3691,20 @@ document.addEventListener('click', function(e) {
       break;
     case 'view-vote-image':
       showImageLightbox(target.dataset.url);
+      break;
+    case 'copy-link':
+      {
+        var linkText = target.dataset.link || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(linkText).then(function() {
+            showToast('链接已复制，打开淘宝App即可打开', 'success');
+          }).catch(function() {
+            fallbackCopyText(linkText);
+          });
+        } else {
+          fallbackCopyText(linkText);
+        }
+      }
       break;
     case 'close-modal':
       closeModal();
