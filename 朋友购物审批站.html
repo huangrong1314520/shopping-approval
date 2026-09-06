@@ -895,6 +895,11 @@ body {
 .img-upload-area.has-img { padding: 8px; }
 .img-upload-hint { font-size: 13px; color: var(--text-secondary); }
 .img-upload-icon { font-size: 28px; margin-bottom: 4px; }
+.img-source-row { display: flex; gap: 8px; }
+.img-source-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 8px; border: 1px dashed var(--border-light); border-radius: var(--radius-sm); background: var(--bg-input); cursor: pointer; transition: all .15s; }
+.img-source-btn:hover { border-color: var(--primary-light); background: rgba(124,58,237,0.05); }
+.img-source-btn-icon { font-size: 24px; }
+.img-source-btn-text { font-size: 12px; color: var(--text-secondary); }
 .img-preview-wrapper { position: relative; display: inline-block; }
 .img-preview { max-width: 100%; max-height: 200px; border-radius: var(--radius-sm); }
 .img-remove-btn {
@@ -2117,9 +2122,18 @@ function resetImageUpload() {
   if (area) {
     area.classList.remove('has-img');
     area.innerHTML =
-      '<div class="img-upload-icon">📷</div>' +
-      '<div class="img-upload-hint">点击上传图片（选填）</div>' +
-      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-vote-image">';
+      '<div class="img-source-row">' +
+        '<div class="img-source-btn" data-action="capture-vote-image">' +
+          '<div class="img-source-btn-icon">📷</div>' +
+          '<div class="img-source-btn-text">拍照</div>' +
+        '</div>' +
+        '<div class="img-source-btn" data-action="pick-vote-image">' +
+          '<div class="img-source-btn-icon">🖼️</div>' +
+          '<div class="img-source-btn-text">从相册</div>' +
+        '</div>' +
+      '</div>' +
+      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="capture-vote-input">' +
+      '<input type="file" accept="image/*" style="display:none" data-action="pick-vote-input">';
   }
 }
 
@@ -2158,9 +2172,18 @@ function resetRequestImage() {
   if (area) {
     area.classList.remove('has-img');
     area.innerHTML =
-      '<div class="img-upload-icon">📷</div>' +
-      '<div class="img-upload-hint">添加物品图片（选填）</div>' +
-      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-request-image">';
+      '<div class="img-source-row">' +
+        '<div class="img-source-btn" data-action="capture-request-image">' +
+          '<div class="img-source-btn-icon">📷</div>' +
+          '<div class="img-source-btn-text">拍照</div>' +
+        '</div>' +
+        '<div class="img-source-btn" data-action="pick-request-image">' +
+          '<div class="img-source-btn-icon">🖼️</div>' +
+          '<div class="img-source-btn-text">从相册</div>' +
+        '</div>' +
+      '</div>' +
+      '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="capture-request-input">' +
+      '<input type="file" accept="image/*" style="display:none" data-action="pick-request-input">';
   }
 }
 
@@ -2396,7 +2419,7 @@ function showApprovalModal(requestId, action) {
   var imgUploadHtml;
   if (voteImageUrl) {
     imgUploadHtml =
-      '<div id="img-upload-area" class="img-upload-area has-img" data-action="select-vote-image">' +
+      '<div id="img-upload-area" class="img-upload-area has-img" data-action="pick-vote-image">' +
         '<div class="img-preview-wrapper">' +
           '<img src="' + voteImageUrl + '" class="img-preview" style="max-height:150px">' +
           '<button class="img-remove-btn" data-action="remove-vote-image">✕</button>' +
@@ -2404,10 +2427,19 @@ function showApprovalModal(requestId, action) {
       '</div>';
   } else {
     imgUploadHtml =
-      '<div id="img-upload-area" class="img-upload-area" data-action="select-vote-image">' +
-        '<div class="img-upload-icon">📷</div>' +
-        '<div class="img-upload-hint">点击上传图片（选填）</div>' +
-        '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-vote-image">' +
+      '<div id="img-upload-area" class="img-upload-area">' +
+        '<div class="img-source-row">' +
+          '<div class="img-source-btn" data-action="capture-vote-image">' +
+            '<div class="img-source-btn-icon">📷</div>' +
+            '<div class="img-source-btn-text">拍照</div>' +
+          '</div>' +
+          '<div class="img-source-btn" data-action="pick-vote-image">' +
+            '<div class="img-source-btn-icon">🖼️</div>' +
+            '<div class="img-source-btn-text">从相册</div>' +
+          '</div>' +
+        '</div>' +
+        '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="capture-vote-input">' +
+        '<input type="file" accept="image/*" style="display:none" data-action="pick-vote-input">' +
       '</div>';
   }
 
@@ -2802,10 +2834,19 @@ function renderSubmit() {
       '</div>' +
       '<div class="form-group">' +
         '<label class="form-label">物品图片（选填）</label>' +
-        '<div id="req-img-area" class="img-upload-area" data-action="select-request-image">' +
-          '<div class="img-upload-icon">📷</div>' +
-          '<div class="img-upload-hint">添加物品图片（选填）</div>' +
-          '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="select-request-image">' +
+        '<div id="req-img-area" class="img-upload-area">' +
+          '<div class="img-source-row">' +
+            '<div class="img-source-btn" data-action="capture-request-image">' +
+              '<div class="img-source-btn-icon">📷</div>' +
+              '<div class="img-source-btn-text">拍照</div>' +
+            '</div>' +
+            '<div class="img-source-btn" data-action="pick-request-image">' +
+              '<div class="img-source-btn-icon">🖼️</div>' +
+              '<div class="img-source-btn-text">从相册</div>' +
+            '</div>' +
+          '</div>' +
+          '<input type="file" accept="image/*" capture="environment" style="display:none" data-action="capture-request-input">' +
+          '<input type="file" accept="image/*" style="display:none" data-action="pick-request-input">' +
         '</div>' +
       '</div>' +
       '<button class="btn btn-primary" data-action="submit-request">📝 提交申请</button>' +
@@ -3496,26 +3537,21 @@ document.addEventListener('click', function(e) {
     case 'confirm-decision':
       handleConfirmDecision();
       break;
-    case 'select-vote-image':
-      /* 点击上传区域或file input */
-      if (target.tagName === 'INPUT') {
-        if (target.files && target.files[0]) handleImageSelect(target);
-      } else {
-        var fileInput = target.querySelector('input[type="file"]');
-        if (fileInput) fileInput.click();
-      }
+    case 'capture-vote-image':
+      { var ci = document.querySelector('input[type="file"][data-action="capture-vote-input"]'); if (ci) ci.click(); }
+      break;
+    case 'pick-vote-image':
+      { var pi = document.querySelector('input[type="file"][data-action="pick-vote-input"]'); if (pi) pi.click(); }
       break;
     case 'remove-vote-image':
       e.stopPropagation();
       resetImageUpload();
       break;
-    case 'select-request-image':
-      if (target.tagName === 'INPUT') {
-        if (target.files && target.files[0]) handleRequestImageSelect(target);
-      } else {
-        var reqFileInput = target.querySelector('input[type="file"]');
-        if (reqFileInput) reqFileInput.click();
-      }
+    case 'capture-request-image':
+      { var rci = document.querySelector('input[type="file"][data-action="capture-request-input"]'); if (rci) rci.click(); }
+      break;
+    case 'pick-request-image':
+      { var rpi = document.querySelector('input[type="file"][data-action="pick-request-input"]'); if (rpi) rpi.click(); }
       break;
     case 'remove-request-image':
       e.stopPropagation();
@@ -3656,16 +3692,18 @@ document.getElementById('modal-overlay').addEventListener('click', function(e) {
 
 /* 成员名称编辑 - 失焦保存 */
 document.addEventListener('change', function(e) {
-  /* 投票图片选择 */
-  var imgInput = e.target.closest('input[type="file"][data-action="select-vote-image"]');
-  if (imgInput) {
-    if (imgInput.files && imgInput.files[0]) handleImageSelect(imgInput);
+  /* 投票图片选择（拍照或相册） */
+  var voteInput = e.target.closest('input[type="file"][data-action="capture-vote-input"], input[type="file"][data-action="pick-vote-input"]');
+  if (voteInput) {
+    if (voteInput.files && voteInput.files[0]) handleImageSelect(voteInput);
+    voteInput.value = '';
     return;
   }
-  /* 申请图片选择 */
-  var reqImgInput = e.target.closest('input[type="file"][data-action="select-request-image"]');
-  if (reqImgInput) {
-    if (reqImgInput.files && reqImgInput.files[0]) handleRequestImageSelect(reqImgInput);
+  /* 申请图片选择（拍照或相册） */
+  var reqInput = e.target.closest('input[type="file"][data-action="capture-request-input"], input[type="file"][data-action="pick-request-input"]');
+  if (reqInput) {
+    if (reqInput.files && reqInput.files[0]) handleRequestImageSelect(reqInput);
+    reqInput.value = '';
     return;
   }
   var target = e.target.closest('[data-action="edit-member-name"]');
