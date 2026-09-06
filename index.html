@@ -1176,15 +1176,35 @@ var DB = {
 
   subscribe: function() {
     var self = this;
-    sb.channel('members-ch').on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, function() {
+    var membersCh = sb.channel('members-ch');
+    membersCh.on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, function() {
       self.refreshMembers();
-    }).subscribe();
-    sb.channel('requests-ch').on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, function() {
-      self.refreshRequests(true); /* true = 来自实时推送 */
-    }).subscribe();
-    sb.channel('favorites-ch').on('postgres_changes', { event: '*', schema: 'public', table: 'favorites' }, function() {
+    });
+    membersCh.subscribe(function(status) {
+      if (status === 'CHANNEL_CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+        setTimeout(function() { self.subscribe(); }, 3000);
+      }
+    });
+
+    var requestsCh = sb.channel('requests-ch');
+    requestsCh.on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, function() {
+      self.refreshRequests(true);
+    });
+    requestsCh.subscribe(function(status) {
+      if (status === 'CHANNEL_CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+        setTimeout(function() { self.subscribe(); }, 3000);
+      }
+    });
+
+    var favCh = sb.channel('favorites-ch');
+    favCh.on('postgres_changes', { event: '*', schema: 'public', table: 'favorites' }, function() {
       self.refreshFavorites();
-    }).subscribe();
+    });
+    favCh.subscribe(function(status) {
+      if (status === 'CHANNEL_CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+        setTimeout(function() { self.subscribe(); }, 3000);
+      }
+    });
   },
 
   refreshMembers: function() {
@@ -1491,21 +1511,52 @@ var DB = {
     });
   },
   toggleFavorite: function(requestId) {
+    var self = this;
     var user = this.getCurrentUser();
     if (!user) return;
     var existing = this.data.favorites.find(function(f) {
       return f.userId === user.id && f.requestId === requestId;
     });
     if (existing) {
-      sb.from('favorites').delete().eq('id', existing.id).then(function() {}).catch(function() {
-        showToast('取消收藏失败，请先在Supabase运行建表SQL', 'error');
+      /* 乐观删除本地 */
+      var favIdx = self.data.favorites.findIndex(function(f) { return f.id === existing.id; });
+      if (favIdx >= 0) self.data.favorites.splice(favIdx, 1);
+      render();
+
+      sb.from('favorites').delete().eq('id', existing.id).then(function(result) {
+        if (result && result.error) {
+          /* 失败回滚 */
+          self.data.favorites.splice(favIdx, 0, existing);
+          showToast('取消收藏失败', 'error');
+          render();
+        }
+      }).catch(function() {
+        self.data.favorites.splice(favIdx, 0, existing);
+        showToast('网络错误，取消收藏失败', 'error');
+        render();
       });
     } else {
       var id = 'f' + Date.now();
+      var newFav = { id: id, userId: user.id, requestId: requestId, createdAt: Date.now() };
+      /* 乐观添加本地 */
+      self.data.favorites.push(newFav);
+      render();
+
       sb.from('favorites').insert({
         id: id, user_id: user.id, request_id: requestId
-      }).then(function() {}).catch(function() {
-        showToast('收藏失败，请先在Supabase运行建表SQL', 'error');
+      }).then(function(result) {
+        if (result && result.error) {
+          /* 失败回滚 */
+          var idx = self.data.favorites.findIndex(function(f) { return f.id === id; });
+          if (idx >= 0) self.data.favorites.splice(idx, 1);
+          showToast('收藏失败', 'error');
+          render();
+        }
+      }).catch(function() {
+        var idx = self.data.favorites.findIndex(function(f) { return f.id === id; });
+        if (idx >= 0) self.data.favorites.splice(idx, 1);
+        showToast('网络错误，收藏失败', 'error');
+        render();
       });
     }
   },
@@ -1980,10 +2031,20 @@ var DB = {
   },
 
   clearAllData: function() {
-    sb.from('requests').delete().neq('id', '').then(function() {
+    var self = this;
+    return sb.from('requests').delete().neq('id', '').then(function() {
       sb.from('favorites').delete().neq('id', '').catch(function() {});
-      sb.from('members').delete().neq('id', 'm1').then(function(result) {
-        if (result.error) showToast(result.error.message, 'error');
+      return sb.from('members').delete().neq('id', 'm1').then(function(result) {
+        if (result && result.error) throw result.error;
+        /* 清理本地状态 */
+        self.data.requests = [];
+        self.data.favorites = [];
+        self.data.members = self.data.members.filter(function(m) { return m.id === 'm1'; });
+        if (state.currentUser && !self.getMember(state.currentUser)) {
+          state.currentUser = null;
+          localStorage.removeItem('fsp-user-id');
+        }
+        render();
       });
     });
   }
@@ -2058,26 +2119,40 @@ var requestImageRemoved = false;
 function compressImage(file, callback) {
   if (!file || !file.type.startsWith('image/')) {
     showToast('请选择图片文件', 'error');
+    callback(null);
     return;
   }
   var reader = new FileReader();
+  reader.onerror = function() {
+    showToast('图片读取失败', 'error');
+    callback(null);
+  };
   reader.onload = function(e) {
     var img = new Image();
+    img.onerror = function() {
+      showToast('图片解析失败', 'error');
+      callback(null);
+    };
     img.onload = function() {
-      var canvas = document.createElement('canvas');
-      var maxDim = 800;
-      var w = img.width, h = img.height;
-      if (w > maxDim || h > maxDim) {
-        if (w > h) { h = h * maxDim / w; w = maxDim; }
-        else { w = w * maxDim / h; h = maxDim; }
+      try {
+        var canvas = document.createElement('canvas');
+        var maxDim = 800;
+        var w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = h * maxDim / w; w = maxDim; }
+          else { w = w * maxDim / h; h = maxDim; }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(function(blob) {
+          callback(blob);
+        }, 'image/jpeg', 0.7);
+      } catch(err) {
+        showToast('图片处理失败', 'error');
+        callback(null);
       }
-      canvas.width = w;
-      canvas.height = h;
-      var ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob(function(blob) {
-        callback(blob);
-      }, 'image/jpeg', 0.7);
     };
     img.src = e.target.result;
   };
@@ -2113,6 +2188,7 @@ function handleImageSelect(input) {
     return;
   }
   var area = document.getElementById('img-upload-area');
+  if (!area) return;
   area.innerHTML = '<div class="img-uploading"><span class="spinner">⟳</span> 压缩中...</div>';
   compressImage(file, function(blob) {
     if (!blob) { resetImageUpload(); return; }
@@ -3354,6 +3430,9 @@ function handleSubmitRequest() {
       navigate('home');
     }
     /* 失败的情况 addRequest 里已经弹过 toast 了 */
+  }).catch(function() {
+    submittingRequest = false;
+    showToast('提交异常，请重试', 'error');
   });
 }
 
@@ -3517,9 +3596,12 @@ function handleConfirmClearData() {
   if (pin !== user.pin) { showToast('PIN码错误，操作取消', 'error'); return; }
 
   closeModal();
-  DB.clearAllData();
-  showToast('数据已清空', 'success');
-  navigate('home');
+  DB.clearAllData().then(function() {
+    showToast('数据已清空', 'success');
+    navigate('home');
+  }).catch(function() {
+    showToast('清空数据失败，请重试', 'error');
+  });
 }
 
 /* ===== 导航 ===== */
