@@ -1538,7 +1538,26 @@ var DB = {
       status: 'pending', votes: [], version: 1
     }).select().then(function(result) {
       if (result.error) {
-        /* 失败则回滚本地数据 */
+        /* version 列不存在（旧数据未迁移），降级为不带 version 的插入 */
+        if (result.error.code === '42703' || (result.error.message && result.error.message.indexOf('version') >= 0)) {
+          return sb.from('requests').insert({
+            id: id,
+            applicant_id: user.id, applicant_name: user.name, applicant_avatar: user.avatar,
+            item: item, price: price, reason: reason, link: link || '',
+            image_url: imageUrl || '',
+            status: 'pending', votes: []
+          }).select().then(function(r2) {
+            if (r2.error) {
+              var idx = self.data.requests.findIndex(function(r) { return r.id === id; });
+              if (idx >= 0) self.data.requests.splice(idx, 1);
+              showToast(r2.error.message, 'error');
+              render();
+              return { success: false };
+            }
+            return { success: true, id: id };
+          });
+        }
+        /* 其他错误，回滚 */
         var idx = self.data.requests.findIndex(function(r) { return r.id === id; });
         if (idx >= 0) self.data.requests.splice(idx, 1);
         showToast(result.error.message, 'error');
