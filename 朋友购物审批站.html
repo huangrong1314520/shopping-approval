@@ -3007,12 +3007,30 @@ function renderApproval() {
     }).join('') +
   '</div>';
 
+  /* 投票规则说明（可折叠） */
+  var rulesHtml =
+    '<div class="card" style="margin-bottom:12px;padding:16px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" data-action="toggle-rules">' +
+        '<span style="font-weight:600;font-size:14px">📜 投票规则说明（新朋友点这里）</span>' +
+        '<span style="font-size:16px;color:var(--text-tertiary)" id="rules-arrow">▼</span>' +
+      '</div>' +
+      '<div id="rules-detail" style="display:none;margin-top:12px;font-size:13px;color:var(--text-secondary);line-height:1.8">' +
+        '<div style="margin-bottom:8px"><strong>🤔 这是什么？</strong><br>朋友之间互相把关的购物评审工具。买东西之前先发个申请，大家投票决定该不该买。</div>' +
+        '<div style="margin-bottom:8px"><strong>📝 怎么发申请？</strong><br>点底部「发起申请」标签 → 填写物品名称、价格、购买理由 → 可以加图片和链接 → 提交后大家就能看到了</div>' +
+        '<div style="margin-bottom:8px"><strong>🗳️ 怎么投票？</strong><br>在「投票」页面看到朋友的申请，点「通过」或「驳回」，可以写上理由和图片。投完票可以改主意重新投。</div>' +
+        '<div style="margin-bottom:8px"><strong>⚖️ 结果怎么定？</strong><br>通过票数 &gt; 驳回票数 → 通过<br>驳回票数 &gt; 通过票数 → 驳回<br>票数相等 → 继续等待其他人投票<br>48小时内没投出结果 → 自动驳回</div>' +
+        '<div style="margin-bottom:8px"><strong>🔄 可以改票吗？</strong><br>可以！随时可以修改你的投票，改票后结果会重新计算。</div>' +
+        '<div style="margin-bottom:8px"><strong>🚫 能审自己的吗？</strong><br>不能。自己发起的申请不能自己投票，得等朋友来评。</div>' +
+        '<div><strong>⏰ 截止规则</strong><br>申请提交后48小时内有效，超时未决自动驳回。所以看到有朋友发的新申请记得尽快投票哦！</div>' +
+      '</div>' +
+    '</div>';
+
   if (allVotable.length === 0 && myOwn.length === 0) {
-    return filterTabsHtml +
+    return filterTabsHtml + rulesHtml +
       '<div class="empty-state"><div class="empty-icon">🎉</div><div class="empty-text">还没有任何申请<br>快去发起第一个吧</div></div>';
   }
 
-  var html = filterTabsHtml;
+  var html = filterTabsHtml + rulesHtml;
 
   var hintText = '';
   if (!user.isApprover) {
@@ -3724,6 +3742,17 @@ document.addEventListener('click', function(e) {
     case 'filter-history':
       state.historyFilter = target.dataset.filter;
       render();
+      break;
+    case 'toggle-rules':
+      {
+        var detail = document.getElementById('rules-detail');
+        var arrow = document.getElementById('rules-arrow');
+        if (detail) {
+          var isOpen = detail.style.display !== 'none';
+          detail.style.display = isOpen ? 'none' : 'block';
+          if (arrow) arrow.textContent = isOpen ? '▼' : '▲';
+        }
+      }
       break;
     case 'filter-approval':
       state.approvalFilter = target.dataset.filter;
